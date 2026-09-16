@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VisionRefine</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">VR</span><span>VisionRefine</span></div>
+      <button class="primary full" id="newProject">＋ 新建项目</button>
+      <nav aria-label="项目列表">
+        <div class="nav-label">项目</div>
+        <div id="projectList" class="project-list"></div>
+      </nav>
+      <div class="sidebar-foot"><span class="status-dot"></span> 本地服务已连接</div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <h1 id="pageTitle">创建标注项目</h1>
+          <p id="pageSubtitle">导入数据后，系统会自动制定模型输入策略。</p>
+        </div>
+        <span class="local-chip">数据仅保存在本机</span>
+      </header>
+
+      <section id="createView" class="content two-column">
+        <form id="projectForm" class="form-pane">
+          <div class="section-heading"><span>01</span><div><h2>数据与任务</h2><p>选择标注目标并指定本地数据位置。</p></div></div>
+          <label>项目名称<input name="name" required placeholder="例如：PANDA 人员标注"></label>
+          <label>任务类型
+            <select name="task">
+              <option value="detection">目标检测</option>
+              <option value="instance_segmentation">实例分割</option>
+              <option value="grounding">视觉定位 Grounding</option>
+              <option value="captioning">图像描述 Captioning</option>
+              <option value="vqa">视觉问答 VQA</option>
+              <option value="ocr">OCR</option>
+              <option value="classification">图像分类</option>
+            </select>
+          </label>
+          <div id="labelsField" class="label-builder">
+            <label>候选标签</label>
+            <div id="createLabelChips" class="label-chips"></div>
+            <div id="createLabelChoices" class="label-choices"></div>
+            <div class="label-add-row" id="customCreateLabelRow" hidden><input id="newProjectLabel" placeholder="输入自定义标签"><button type="button" class="secondary label-add" id="addProjectLabel" aria-label="添加标签">＋</button></div>
+            <small>点击选择检测类别；AI 和人工只能使用选中的标签。</small>
+          </div>
+          <label>图像文件夹<input name="dataset_path" required placeholder="/Volumes/Dataset/images"></label>
+          <label>已有粗标注 <span class="optional">可选</span><input name="annotation_path" placeholder="COCO / YOLO / 通用 JSON 文件"></label>
+
+          <div class="section-heading compact"><span>02</span><div><h2>模型输入限制</h2><p>路由器据此决定整图、缩放或切片。</p></div></div>
+          <label>模型最大输入边长
+            <div class="number-field"><input name="model_max_side" type="number" min="256" max="8192" value="1536"><span>px</span></div>
+          </label>
+          <div id="formError" role="alert"></div>
+          <button class="primary submit" type="submit">创建并分析数据</button>
+        </form>
+
+        <div class="workflow-pane">
+          <div class="workflow-title">自动标注流程</div>
+          <ol class="workflow">
+            <li class="active"><span>1</span><div><strong>分析数据</strong><small>尺寸、格式、已有标注</small></div></li>
+            <li><span>2</span><div><strong>AI 初标 / 精修</strong><small>自动选择整图或局部输入</small></div></li>
+            <li><span>3</span><div><strong>查漏补缺</strong><small>全局复扫与结果合并</small></div></li>
+            <li><span>4</span><div><strong>人工检查</strong><small>修改、确认与版本记录</small></div></li>
+            <li><span>5</span><div><strong>AI 最终复核</strong><small>只提出问题，不覆盖人工结果</small></div></li>
+          </ol>
+          <div class="principle"><strong>基本原则</strong><p>AI 输出始终是建议版本。人工确认的数据独立保存，可以比较、回滚和再次审核。</p></div>
+        </div>
+      </section>
+
+      <section id="projectView" class="content" hidden>
+        <div class="summary-band">
+          <div><span>图像</span><strong id="statImages">—</strong></div>
+          <div><span>平均大小</span><strong id="statMP">—</strong></div>
+          <div><span>最大尺寸</span><strong id="statSize">—</strong></div>
+          <div><span>粗标注</span><strong id="statCoarse">—</strong></div>
+        </div>
+        <div class="project-grid">
+          <section class="route-pane">
+            <div class="pane-head"><div><h2>分辨率路由结果</h2><p>根据图像尺寸、任务类型和模型输入上限生成。</p></div><button id="reanalyze" class="secondary">重新分析</button></div>
+            <div id="routeBars" class="route-bars"></div>
+            <h3>图像检查</h3>
+            <div class="image-table-wrap"><table><thead><tr><th>图像</th><th>尺寸</th><th>MP</th><th>处理策略</th></tr></thead><tbody id="imageRows"></tbody></table></div>
+          </section>
+          <aside class="run-pane">
+            <h2>流水线</h2>
+            <div id="pipeline"></div>
+            <div class="label-editor">
+              <label>项目候选标签</label>
+              <div id="currentLabelChips" class="label-chips"></div>
+              <div id="currentLabelChoices" class="label-choices"></div>
+              <div class="label-add-row" id="customCurrentLabelRow" hidden><input id="newCurrentLabel" placeholder="输入自定义标签"><button type="button" class="secondary label-add" id="addCurrentLabel" aria-label="添加标签">＋</button></div>
+              <button class="secondary full" id="saveLabels">保存标签</button>
+              <small id="labelSchemaStatus" class="schema-status"></small>
+            </div>
+            <button class="secondary full" id="startAI">配置 AI 适配器</button>
+            <button class="primary full run-pilot" id="runPilot">运行单切片测试</button>
+            <button class="secondary full run-pilot" id="openWorkspace">打开标注工作台</button>
+            <div id="pilotStatus" class="hint" aria-live="polite"></div>
+          </aside>
+        </div>
+        <section id="pilotPanel" class="pilot-panel" hidden>
+          <div class="pane-head"><div><h2>AI 建议预览</h2><p id="pilotMeta"></p></div><span class="local-chip">不会覆盖人工标注</span></div>
+          <div class="pilot-layout">
+            <canvas id="pilotCanvas" width="1536" height="1536" aria-label="AI 检测建议预览"></canvas>
+            <div class="pilot-detail"><h3>模型摘要</h3><p id="pilotSummary"></p><h3>建议框</h3><div id="pilotObjects"></div></div>
+          </div>
+        </section>
+        <section id="annotationWorkspace" class="annotation-workspace" hidden>
+          <div class="workspace-toolbar">
+            <label>图像<select id="workspaceImage"></select></label>
+            <label>新增框标签<select id="workspaceLabel"></select></label>
+            <button class="secondary" id="runInitialDetection">AI 初标当前图像</button>
+            <button class="secondary" id="deleteBox" disabled>删除选中框</button>
+            <button class="primary" id="saveAnnotations">保存人工检查</button>
+            <span id="workspaceStatus" aria-live="polite"></span>
+          </div>
+          <div class="viewer-grid">
+            <section><h3>原图标注视图</h3><canvas id="detailCanvas" width="1400" height="800"></canvas></section>
+          </div>
+          <p class="workspace-help">滚轮以鼠标位置为中心缩放；按住鼠标右键拖动图像来改变显示区域。左键拖动空白处新增框；单击框后可拖动框体或 8 个控制点，Delete 删除。所有坐标均保存为原图坐标。</p>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="adapterDialog" class="adapter-dialog">
+    <form id="adapterForm" method="dialog">
+      <div class="dialog-head">
+        <div><h2>配置 AI 服务</h2><p>连接本地 vLLM 或任意 OpenAI-compatible 服务。</p></div>
+        <button type="button" class="icon-button" id="closeAdapter" aria-label="关闭">×</button>
+      </div>
+      <label>服务类型
+        <select name="kind"><option value="openai_compatible">OpenAI-compatible / vLLM</option></select>
+      </label>
+      <label>API 地址<input name="base_url" required placeholder="http://127.0.0.1:8000/v1"></label>
+      <label>模型名称<input name="model" required placeholder="Qwen3-VL-8B-Instruct" list="modelOptions"><datalist id="modelOptions"></datalist></label>
+      <label>API Key 环境变量 <span class="optional">可选</span><input name="api_key_env" placeholder="例如 OPENAI_API_KEY"><small>只保存环境变量名称，不保存 Key 内容。</small></label>
+      <div id="adapterStatus" class="adapter-status" aria-live="polite"></div>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" id="testAdapter">测试连接</button>
+        <button type="submit" class="primary">保存配置</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

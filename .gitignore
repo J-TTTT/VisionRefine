@@ -1,0 +1,15 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+workspace/projects/*
+!workspace/projects/.gitkeep
+workspace/cache/*
+!workspace/cache/.gitkeep
+workspace/trash/
+.env
+.env.*
+*.pem
+*.key
