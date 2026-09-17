@@ -9,11 +9,15 @@ const detectionLabelOptions = [
   ["stop sign", "停车标志"], ["fire hydrant", "消防栓"], ["bench", "长椅"], ["backpack", "背包"],
   ["umbrella", "雨伞"], ["handbag", "手提包"], ["suitcase", "行李箱"], ["dog", "狗"]
 ];
+const categoryColors = [
+  "#d84a3a", "#1677c8", "#d96c0b", "#7657c7", "#13856f", "#bd3d78",
+  "#587c18", "#087f91", "#95551a", "#5266bd", "#a43f4b", "#32765a"
+];
 const editor = {
   images: [], image: null, meta: null, objects: [], selected: -1,
   view: {x: 0, y: 0, width: 2048, height: 2048}, thumbnail: new Image(), crop: new Image(),
   cropView: null, cropToken: 0, cropTimer: null, interaction: null, spacePressed: false, dirty: false,
-  annotationStatus: "unreviewed", initialJob: null
+  annotationStatus: "unreviewed", initialJob: null, tool: "draw"
 };
 
 const taskNames = {
@@ -28,6 +32,16 @@ const labeledTasks = new Set(["detection", "instance_segmentation", "grounding",
 
 function normalizeLabel(value) {
   return String(value).trim().replace(/\s+/g, " ");
+}
+
+function categoryColor(label) {
+  const value = String(label || "未分类");
+  const labels = currentLabels.length ? currentLabels : (current?.labels || []);
+  const knownIndex = labels.indexOf(value);
+  if (knownIndex >= 0) return categoryColors[knownIndex % categoryColors.length];
+  let hash = 0;
+  for (const character of value) hash = ((hash * 31) + character.codePointAt(0)) >>> 0;
+  return categoryColors[hash % categoryColors.length];
 }
 
 function renderLabelChips(targetId, labels, removeLabel, locked = false) {
@@ -335,12 +349,13 @@ function showPilotResult(result, shouldScroll = true) {
       const [x1, y1, x2, y2] = object.bbox;
       const localX = x1 - result.crop.x, localY = y1 - result.crop.y;
       const width = x2 - x1, height = y2 - y1;
-      context.strokeStyle = "#20e080";
+      const color = categoryColor(object.label);
+      context.strokeStyle = color;
       context.lineWidth = 4;
       context.strokeRect(localX, localY, width, height);
       const label = `${object.label} ${index + 1}`;
       const labelWidth = context.measureText(label).width + 12;
-      context.fillStyle = "#146c4b";
+      context.fillStyle = color;
       context.fillRect(localX, Math.max(0, localY - 25), labelWidth, 25);
       context.fillStyle = "#ffffff";
       context.fillText(label, localX + 6, Math.max(19, localY - 6));
@@ -377,12 +392,14 @@ async function openAnnotationWorkspace() {
 }
 
 async function loadEditorImage(path) {
+  closeBoxLabelPanel();
   editor.image = path;
   editor.meta = editor.images.find(row => row.path === path);
   editor.selected = -1;
   editor.interaction = null;
   editor.dirty = false;
   editor.cropView = null;
+  setEditorTool("draw");
   editor.view.width = editor.meta.width;
   editor.view.height = editor.meta.height;
   editor.view.x = 0;
@@ -446,9 +463,42 @@ function drawDetail() {
   editor.objects.forEach((object, index) => {
     const [x1, y1, x2, y2] = object.bbox;
     if (x2 < view.x || y2 < view.y || x1 > view.x + view.width || y1 > view.y + view.height) return;
-    context.strokeStyle = index === editor.selected ? "#20e080" : "#ef5f4c";
+    const screenX = fit.x + (x1 - view.x) * fit.scale;
+    const screenY = fit.y + (y1 - view.y) * fit.scale;
+    const screenWidth = (x2 - x1) * fit.scale;
+    const screenHeight = (y2 - y1) * fit.scale;
+    const color = categoryColor(object.label);
+    if (index === editor.selected) {
+      context.strokeStyle = "#ffffff";
+      context.lineWidth = 7;
+      context.strokeRect(screenX, screenY, screenWidth, screenHeight);
+    }
+    context.strokeStyle = color;
     context.lineWidth = index === editor.selected ? 4 : 2;
-    context.strokeRect(fit.x + (x1 - view.x) * fit.scale, fit.y + (y1 - view.y) * fit.scale, (x2 - x1) * fit.scale, (y2 - y1) * fit.scale);
+    context.strokeRect(screenX, screenY, screenWidth, screenHeight);
+
+    // Keep labels attached to their boxes so both AI proposals and human boxes
+    // remain identifiable while zooming and panning.
+    const label = object.confidence == null
+      ? String(object.label || "未分类")
+      : `${object.label || "未分类"} ${Math.round(object.confidence * 100)}%`;
+    const labelMetrics = labelMetricsFor(screenWidth, screenHeight);
+    context.font = `600 ${labelMetrics.fontSize}px system-ui, sans-serif`;
+    const labelWidth = Math.max(labelMetrics.minWidth, context.measureText(label).width + labelMetrics.paddingX * 2);
+    const labelHeight = labelMetrics.fontSize + labelMetrics.paddingY * 2;
+    const labelX = Math.max(0, Math.min(canvas.width - labelWidth, screenX));
+    const labelY = screenY - labelHeight >= 0 ? screenY - labelHeight : screenY;
+    context.fillStyle = color;
+    context.fillRect(labelX, labelY, labelWidth, labelHeight);
+    if (index === editor.selected) {
+      context.strokeStyle = "#ffffff";
+      context.lineWidth = 2;
+      context.strokeRect(labelX + 1, labelY + 1, labelWidth - 2, labelHeight - 2);
+    }
+    context.fillStyle = "#ffffff";
+    context.textBaseline = "middle";
+    context.fillText(label, labelX + labelMetrics.paddingX, labelY + labelHeight / 2);
+    context.textBaseline = "alphabetic";
   });
   if (editor.selected >= 0) drawSelectionHandles(context, fit);
   if (editor.interaction?.kind === "create") {
@@ -458,6 +508,123 @@ function drawDetail() {
     context.strokeRect(fit.x + (x1 - view.x) * fit.scale, fit.y + (y1 - view.y) * fit.scale, Math.abs(drag.endX - drag.startX) * fit.scale, Math.abs(drag.endY - drag.startY) * fit.scale);
     context.setLineDash([]);
   }
+  if (!$("boxLabelPanel").hidden) positionBoxLabelPanel();
+}
+
+function labelHitAt(x, y) {
+  const canvas = $("detailCanvas"), fit = canvasFit(canvas, editor.view.width, editor.view.height);
+  const context = canvas.getContext("2d");
+  context.font = "600 14px system-ui, sans-serif";
+  for (let index = editor.objects.length - 1; index >= 0; index -= 1) {
+    const object = editor.objects[index];
+    const [x1, y1, x2, y2] = object.bbox;
+    if (x2 < editor.view.x || y2 < editor.view.y || x1 > editor.view.x + editor.view.width || y1 > editor.view.y + editor.view.height) continue;
+    const screenX = fit.x + (x1 - editor.view.x) * fit.scale;
+    const screenY = fit.y + (y1 - editor.view.y) * fit.scale;
+    const screenWidth = (x2 - x1) * fit.scale;
+    const screenHeight = (y2 - y1) * fit.scale;
+    const label = object.confidence == null
+      ? String(object.label || "未分类")
+      : `${object.label || "未分类"} ${Math.round(object.confidence * 100)}%`;
+    const labelMetrics = labelMetricsFor(screenWidth, screenHeight);
+    context.font = `600 ${labelMetrics.fontSize}px system-ui, sans-serif`;
+    const width = Math.max(labelMetrics.minWidth, context.measureText(label).width + labelMetrics.paddingX * 2);
+    const labelHeight = labelMetrics.fontSize + labelMetrics.paddingY * 2;
+    const labelX = Math.max(0, Math.min(canvas.width - width, screenX));
+    const labelY = screenY - labelHeight >= 0 ? screenY - labelHeight : screenY;
+    if (x >= labelX && x <= labelX + width && y >= labelY && y <= labelY + labelHeight) return index;
+  }
+  return -1;
+}
+
+function labelMetricsFor(screenWidth, screenHeight) {
+  // Every label dimension derives from the box's rendered size, so the text
+  // and its background scale together with the box during zoom.
+  const reference = Math.max(1, Math.min(screenHeight, screenWidth * 1.8));
+  const fontSize = Math.max(4, Math.min(72, reference * 0.16));
+  return {
+    fontSize,
+    paddingX: fontSize * 0.48,
+    paddingY: fontSize * 0.28,
+    minWidth: fontSize * 2.6,
+  };
+}
+
+function selectedLabelRect() {
+  const object = editor.selected >= 0 ? editor.objects[editor.selected] : null;
+  if (!object) return null;
+  const canvas = $("detailCanvas"), context = canvas.getContext("2d");
+  const fit = canvasFit(canvas, editor.view.width, editor.view.height);
+  const [x1, y1, x2, y2] = object.bbox;
+  const x = fit.x + (x1 - editor.view.x) * fit.scale;
+  const y = fit.y + (y1 - editor.view.y) * fit.scale;
+  const screenWidth = (x2 - x1) * fit.scale;
+  const screenHeight = (y2 - y1) * fit.scale;
+  const text = object.confidence == null ? String(object.label || "未分类") : `${object.label || "未分类"} ${Math.round(object.confidence * 100)}%`;
+  const metrics = labelMetricsFor(screenWidth, screenHeight);
+  context.font = `600 ${metrics.fontSize}px system-ui, sans-serif`;
+  const width = Math.max(metrics.minWidth, context.measureText(text).width + metrics.paddingX * 2);
+  const height = metrics.fontSize + metrics.paddingY * 2;
+  return {x: Math.max(0, Math.min(canvas.width - width, x)), y: y - height >= 0 ? y - height : y, width, height, fontSize: metrics.fontSize};
+}
+
+function selectEditorObject(index) {
+  const panelWasOpen = !$("boxLabelPanel").hidden;
+  editor.selected = index;
+  updateDeleteButton();
+  drawDetail();
+  if (panelWasOpen) openBoxLabelPanel();
+}
+
+function changeSelectedLabel(label) {
+  const object = editor.selected >= 0 ? editor.objects[editor.selected] : null;
+  if (!object || !label) return;
+  if (object.label !== label) {
+    object.label = label;
+    markEditorDirty();
+  }
+  setEditorTool("draw");
+}
+
+function closeBoxLabelPanel() {
+  $("boxLabelPanel").hidden = true;
+}
+
+function openBoxLabelPanel() {
+  const object = editor.selected >= 0 ? editor.objects[editor.selected] : null;
+  if (!object) return closeBoxLabelPanel();
+  const labelRect = selectedLabelRect();
+  if (!labelRect) return closeBoxLabelPanel();
+  const options = $("boxLabelOptions");
+  options.innerHTML = "";
+  Array.from($("workspaceLabel").options).forEach(option => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `box-label-option${option.value === object.label ? " selected" : ""}`;
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", option.value === object.label ? "true" : "false");
+    button.textContent = option.textContent;
+    button.style.setProperty("--label-color", categoryColor(option.value));
+    button.onclick = () => changeSelectedLabel(option.value);
+    options.appendChild(button);
+  });
+  const palette = $("boxLabelPanel");
+  palette.hidden = false;
+  positionBoxLabelPanel();
+}
+
+function positionBoxLabelPanel() {
+  const palette = $("boxLabelPanel"), labelRect = selectedLabelRect();
+  if (palette.hidden || !labelRect) return;
+  const canvas = $("detailCanvas"), section = canvas.parentElement;
+  const canvasRect = canvas.getBoundingClientRect(), sectionRect = section.getBoundingClientRect();
+  const scaleX = canvasRect.width / canvas.width, scaleY = canvasRect.height / canvas.height;
+  palette.style.setProperty("--palette-font-size", `${Math.max(10, Math.min(18, labelRect.fontSize * scaleX))}px`);
+  const anchorX = canvasRect.left - sectionRect.left + labelRect.x * scaleX;
+  const anchorY = canvasRect.top - sectionRect.top + (labelRect.y + labelRect.height) * scaleY + 4;
+  const paletteWidth = palette.offsetWidth, paletteHeight = palette.offsetHeight;
+  palette.style.left = `${Math.max(4, Math.min(section.clientWidth - paletteWidth - 4, anchorX))}px`;
+  palette.style.top = `${Math.max(34, Math.min(section.clientHeight - paletteHeight - 4, anchorY))}px`;
 }
 
 function selectionHandles(bbox) {
@@ -468,7 +635,7 @@ function selectionHandles(bbox) {
 function drawSelectionHandles(context, fit) {
   const object = editor.objects[editor.selected];
   if (!object) return;
-  context.fillStyle = "#ffffff"; context.strokeStyle = "#146c4b"; context.lineWidth = 2;
+  context.fillStyle = categoryColor(object.label); context.strokeStyle = "#ffffff"; context.lineWidth = 2;
   Object.values(selectionHandles(object.bbox)).forEach(([x, y]) => {
     const px = fit.x + (x - editor.view.x) * fit.scale, py = fit.y + (y - editor.view.y) * fit.scale;
     context.fillRect(px - 5, py - 5, 10, 10); context.strokeRect(px - 5, py - 5, 10, 10);
@@ -493,12 +660,39 @@ function selectedHandleAt(x, y) {
   return nearest;
 }
 
+function objectHitAt(x, y) {
+  const hits = editor.objects.map((object, index) => ({index, object})).filter(({object}) =>
+    x >= object.bbox[0] && x <= object.bbox[2] && y >= object.bbox[1] && y <= object.bbox[3]
+  );
+  if (!hits.length) return -1;
+  return hits.sort((a, b) =>
+    ((a.object.bbox[2] - a.object.bbox[0]) * (a.object.bbox[3] - a.object.bbox[1])) -
+    ((b.object.bbox[2] - b.object.bbox[0]) * (b.object.bbox[3] - b.object.bbox[1]))
+  )[0].index;
+}
+
 function cursorForHandle(handle) {
   if (["nw", "se"].includes(handle)) return "nwse-resize";
   if (["ne", "sw"].includes(handle)) return "nesw-resize";
   if (["n", "s"].includes(handle)) return "ns-resize";
   if (["e", "w"].includes(handle)) return "ew-resize";
   return "crosshair";
+}
+
+function setEditorTool(tool) {
+  editor.tool = tool === "edit" ? "edit" : "draw";
+  const drawing = editor.tool === "draw";
+  $("drawBoxTool").classList.toggle("active", drawing);
+  $("drawBoxTool").setAttribute("aria-pressed", drawing ? "true" : "false");
+  $("editBoxTool").classList.toggle("active", !drawing);
+  $("editBoxTool").setAttribute("aria-pressed", drawing ? "false" : "true");
+  if (drawing) {
+    editor.selected = -1;
+    closeBoxLabelPanel();
+    updateDeleteButton();
+  }
+  $("detailCanvas").style.cursor = drawing ? "crosshair" : "default";
+  drawDetail();
 }
 
 function markEditorDirty() {
@@ -549,14 +743,37 @@ async function runInitialDetection() {
 }
 
 $("runInitialDetection").onclick = runInitialDetection;
+$("drawBoxTool").onclick = () => setEditorTool("draw");
+$("editBoxTool").onclick = () => setEditorTool("edit");
 
 $("detailCanvas").addEventListener("pointerdown", event => {
   const [x, y] = detailImagePoint(event);
+  const [canvasX, canvasY] = canvasPoint(event, event.currentTarget);
   if (event.button === 2 || event.button === 1 || editor.spacePressed) {
     editor.interaction = {kind: "pan", clientX: event.clientX, clientY: event.clientY, viewX: editor.view.x, viewY: editor.view.y};
     event.currentTarget.setPointerCapture(event.pointerId);
     event.currentTarget.style.cursor = "grabbing";
     event.preventDefault();
+    return;
+  }
+  const labeled = labelHitAt(canvasX, canvasY);
+  if (labeled >= 0) {
+    setEditorTool("edit");
+    selectEditorObject(labeled);
+    openBoxLabelPanel();
+    return;
+  }
+  if (editor.tool === "draw") {
+    const hitIndex = objectHitAt(x, y);
+    selectEditorObject(-1);
+    closeBoxLabelPanel();
+    editor.interaction = {
+      kind: "create", startX: x, startY: y, endX: x, endY: y,
+      clientX: event.clientX, clientY: event.clientY, hitIndex
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    updateDeleteButton();
+    drawDetail();
     return;
   }
   const handle = selectedHandleAt(x, y);
@@ -571,14 +788,14 @@ $("detailCanvas").addEventListener("pointerdown", event => {
     event.currentTarget.setPointerCapture(event.pointerId);
     return;
   }
-  const hits = editor.objects.map((object, index) => ({index, object})).filter(({object}) => x >= object.bbox[0] && x <= object.bbox[2] && y >= object.bbox[1] && y <= object.bbox[3]);
-  if (hits.length) {
-    editor.selected = hits.sort((a, b) => ((a.object.bbox[2]-a.object.bbox[0])*(a.object.bbox[3]-a.object.bbox[1])) - ((b.object.bbox[2]-b.object.bbox[0])*(b.object.bbox[3]-b.object.bbox[1])))[0].index;
+  const hitIndex = objectHitAt(x, y);
+  if (hitIndex >= 0) {
+    selectEditorObject(hitIndex);
     editor.interaction = null;
   } else {
-    editor.selected = -1;
-    editor.interaction = {kind: "create", startX: x, startY: y, endX: x, endY: y};
-    event.currentTarget.setPointerCapture(event.pointerId);
+    selectEditorObject(-1);
+    closeBoxLabelPanel();
+    editor.interaction = null;
   }
   updateDeleteButton(); drawDetail();
 });
@@ -586,8 +803,13 @@ $("detailCanvas").addEventListener("pointerdown", event => {
 $("detailCanvas").addEventListener("pointermove", event => {
   const [x, y] = detailImagePoint(event), interaction = editor.interaction;
   if (!interaction) {
-    const handle = selectedHandleAt(x, y);
-    event.currentTarget.style.cursor = handle ? cursorForHandle(handle) : (editor.spacePressed ? "grab" : "crosshair");
+    const [canvasX, canvasY] = canvasPoint(event, event.currentTarget);
+    if (labelHitAt(canvasX, canvasY) >= 0) {
+      event.currentTarget.style.cursor = "pointer";
+      return;
+    }
+    const handle = editor.tool === "edit" ? selectedHandleAt(x, y) : null;
+    event.currentTarget.style.cursor = editor.spacePressed ? "grab" : (editor.tool === "draw" ? "crosshair" : (handle ? cursorForHandle(handle) : "default"));
     return;
   }
   if (interaction.kind === "create") {
@@ -621,11 +843,19 @@ $("detailCanvas").addEventListener("pointerup", event => {
   if (interaction.kind === "create") {
     [interaction.endX, interaction.endY] = detailImagePoint(event);
     const bbox = [Math.min(interaction.startX, interaction.endX), Math.min(interaction.startY, interaction.endY), Math.max(interaction.startX, interaction.endX), Math.max(interaction.startY, interaction.endY)];
-    if (bbox[2] - bbox[0] >= 3 && bbox[3] - bbox[1] >= 3) {
+    const dragged = Math.hypot(event.clientX - interaction.clientX, event.clientY - interaction.clientY) >= 4;
+    if (dragged && bbox[2] - bbox[0] >= 3 && bbox[3] - bbox[1] >= 3) {
       editor.objects.push({id: `human-${Date.now()}`, label: $("workspaceLabel").value, bbox, confidence: null, source: "human"});
-      editor.selected = editor.objects.length - 1;
+      // Leave creation mode ready for the next object. The new box can still
+      // be selected by clicking its box or label, but its resize handles do
+      // not intercept the next annotation drag.
+      editor.selected = -1;
       markEditorDirty();
+    } else if (interaction.hitIndex >= 0) {
+      setEditorTool("edit");
+      selectEditorObject(interaction.hitIndex);
     }
+    event.currentTarget.style.cursor = "crosshair";
   } else if (["move", "resize"].includes(interaction.kind)) {
     markEditorDirty();
   } else if (interaction.kind === "pan") {
@@ -633,11 +863,13 @@ $("detailCanvas").addEventListener("pointerup", event => {
     event.currentTarget.style.cursor = "grab";
   }
   editor.interaction = null;
+  if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   updateDeleteButton(); drawDetail();
 });
 
 $("detailCanvas").addEventListener("pointercancel", event => {
   editor.interaction = null;
+  if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   event.currentTarget.style.cursor = "crosshair";
   drawDetail();
 });
@@ -646,7 +878,7 @@ $("detailCanvas").addEventListener("wheel", event => {
   if (!editor.meta) return;
   event.preventDefault();
   const [anchorX, anchorY] = detailImagePoint(event);
-  const factor = event.deltaY < 0 ? 0.78 : 1 / 0.78;
+  const factor = event.deltaY < 0 ? 0.92 : 1 / 0.92;
   const nextWidth = Math.max(256, Math.min(editor.meta.width, editor.view.width * factor));
   const nextHeight = Math.max(256, Math.min(editor.meta.height, editor.view.height * factor));
   const rx = (anchorX - editor.view.x) / editor.view.width, ry = (anchorY - editor.view.y) / editor.view.height;
@@ -660,7 +892,7 @@ function deleteSelectedBox() {
   editor.objects.splice(editor.selected, 1);
   editor.selected = -1;
   markEditorDirty();
-  updateDeleteButton(); drawDetail();
+  setEditorTool("draw");
 }
 
 function updateDeleteButton() { $("deleteBox").disabled = editor.selected < 0; }
@@ -671,6 +903,10 @@ document.addEventListener("keydown", event => {
     if (!$("annotationWorkspace").hidden) event.preventDefault();
   }
   if (event.key === "Delete" && !$("annotationWorkspace").hidden && !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) deleteSelectedBox();
+  if (!$("annotationWorkspace").hidden && !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) {
+    if (event.key.toLowerCase() === "n") setEditorTool("draw");
+    if (event.key.toLowerCase() === "v") setEditorTool("edit");
+  }
 });
 document.addEventListener("keyup", event => { if (event.code === "Space") editor.spacePressed = false; });
 $("workspaceImage").onchange = async event => {

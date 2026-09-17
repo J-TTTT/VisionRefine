@@ -61,16 +61,25 @@ VisionRefine 是一个本地优先的 AI 辅助多模态数据标注工具。它
 
 ### 在原始像素空间里精修
 
-工作台按需读取原始分辨率区域。滚轮缩放、右键平移、左键新增框；选中框支持移动、八方向缩放和删除。所有坐标始终保存于原图坐标系。
+工作台按需读取原始分辨率区域。滚轮缩放、右键平移；“新增框”模式支持连续绘制和重叠绘制，“编辑框”模式支持移动、八方向缩放和删除。所有坐标始终保存于原图坐标系。
 
 ![VisionRefine 超高分辨率标注工作台](docs/images/annotation-workspace.png)
+
+### 直接在画布上改框和标签
+
+- 不同类别使用稳定的独立颜色，bbox 和标签底色保持一致。
+- 单击已有框即可选中，并自动进入编辑模式；白色外边缘表示当前选中框。
+- 单击图像上的标签，可从项目候选池中直接改类。
+- 删除框或完成标签修改后，工具会自动回到“新增框”模式。
+- 快捷键：`N` 新增框，`V` 编辑框，`Delete` 删除选中框。
 
 ### 当前能力
 
 | 能力 | 状态 | 说明 |
 |---|:---:|---|
 | 数据集分析与分辨率路由 | ✅ | 图像统计、尺寸检查、粗标注识别与输入策略推荐 |
-| 超高分辨率检测框编辑 | ✅ | 缩放、平移、新增、选择、移动、八方向缩放与删除 |
+| 超高分辨率检测框编辑 | ✅ | 缩放、平移、连续/重叠绘制、选择、移动、八方向缩放与删除 |
+| 画布内标签精修 | ✅ | 分类着色的框与标签，点击标签即可改类 |
 | OpenAI-compatible / vLLM | ✅ | 模型发现、单切片测试与整图切片测试 |
 | 人工版本保护 | ✅ | AI 建议与人工确认结果分开保存，重新加载优先使用人工版本 |
 | 多模态项目建模 | 🧪 | 检测、实例分割、视觉定位、描述、VQA、OCR 与分类 |
@@ -99,16 +108,25 @@ The project view reports image counts, dimensions, and existing annotations, the
 
 ### Refine annotations in original pixel space
 
-The workspace loads original-resolution regions on demand. Scroll to zoom, right-drag to pan, and left-drag to create a box. Selected boxes can be moved, resized from eight handles, or deleted.
+The workspace loads original-resolution regions on demand. Scroll to zoom and right-drag to pan. Draw mode supports continuous and overlapping box creation; Edit mode supports moving, eight-handle resizing, and deletion. Coordinates always remain in the original image space.
 
 ![VisionRefine ultra-high-resolution annotation workspace](docs/images/annotation-workspace.png)
+
+### Edit boxes and labels directly on the canvas
+
+- Each class receives a stable, distinct color shared by its box and label background.
+- Click an existing box to select it and enter Edit mode. A white outer stroke marks the active box.
+- Click an on-canvas label to choose a replacement from the project's label pool.
+- Deleting a box or choosing a label automatically returns the editor to Draw mode.
+- Shortcuts: `N` for Draw mode, `V` for Edit mode, and `Delete` to remove the selected box.
 
 ### Capability matrix
 
 | Capability | Status | Details |
 |---|:---:|---|
 | Dataset inspection and routing | ✅ | Image statistics, dimensions, coarse annotations, and recommended input strategy |
-| Ultra-high-resolution box editing | ✅ | Zoom, pan, create, select, move, eight-handle resize, and delete |
+| Ultra-high-resolution box editing | ✅ | Zoom, pan, continuous/overlapping creation, selection, movement, eight-handle resize, and deletion |
+| On-canvas label refinement | ✅ | Class-colored boxes and labels with click-to-relabel interaction |
 | OpenAI-compatible / vLLM adapters | ✅ | Model discovery, single-tile pilots, and tiled whole-image tests |
 | Human revision protection | ✅ | AI suggestions stay separate; human-reviewed revisions win on reload |
 | Multimodal project modeling | 🧪 | Detection, instance segmentation, grounding, captioning, VQA, OCR, and classification |

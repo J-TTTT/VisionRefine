@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VisionRefine</title>
-  <link rel="stylesheet" href="/assets/styles.css">
+  <link rel="stylesheet" href="/assets/styles.css?v=20260918-7">
 </head>
 <body>
   <div class="app-shell">
@@ -114,16 +114,26 @@
         <section id="annotationWorkspace" class="annotation-workspace" hidden>
           <div class="workspace-toolbar">
             <label>图像<select id="workspaceImage"></select></label>
-            <label>新增框标签<select id="workspaceLabel"></select></label>
+            <label>新增框标签<select id="workspaceLabel" title="新绘制的框使用此标签"></select></label>
+            <div class="editor-tools" role="group" aria-label="标注工具">
+              <button class="secondary active" id="drawBoxTool" type="button" aria-pressed="true" title="新增框（N）">＋ 新增框</button>
+              <button class="secondary" id="editBoxTool" type="button" aria-pressed="false" title="编辑框（V）">编辑框</button>
+            </div>
             <button class="secondary" id="runInitialDetection">AI 初标当前图像</button>
             <button class="secondary" id="deleteBox" disabled>删除选中框</button>
             <button class="primary" id="saveAnnotations">保存人工检查</button>
             <span id="workspaceStatus" aria-live="polite"></span>
           </div>
           <div class="viewer-grid">
-            <section><h3>原图标注视图</h3><canvas id="detailCanvas" width="1400" height="800"></canvas></section>
+            <section class="image-editor">
+              <h3>原图标注视图</h3>
+              <canvas id="detailCanvas" width="1400" height="800"></canvas>
+              <div id="boxLabelPanel" class="label-chip-palette" aria-label="修改选中框标签" hidden>
+                <div id="boxLabelOptions" class="box-label-options" role="listbox" aria-label="候选标签"></div>
+              </div>
+            </section>
           </div>
-          <p class="workspace-help">滚轮以鼠标位置为中心缩放；按住鼠标右键拖动图像来改变显示区域。左键拖动空白处新增框；单击框后可拖动框体或 8 个控制点，Delete 删除。所有坐标均保存为原图坐标。</p>
+          <p class="workspace-help">“新增框”模式下可连续左键拖动画框，包括在已有框上重叠绘制；单击已有框会选中并自动进入“编辑框”模式。编辑时可移动框或拖拽 8 个控制点；单击标签可改类。滚轮缩放，右键拖动图像，Delete 删除。</p>
         </section>
       </section>
     </main>
@@ -148,6 +158,6 @@
       </div>
     </form>
   </dialog>
-  <script src="/assets/app.js"></script>
+  <script src="/assets/app.js?v=20260918-7"></script>
 </body>
 </html>

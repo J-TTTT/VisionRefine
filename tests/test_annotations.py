@@ -57,6 +57,32 @@ def test_ai_suggestion_is_loaded_until_human_review_exists(tmp_path: Path, monke
     assert response.json()["objects"][0]["bbox"] == [1, 2, 3, 4]
 
 
+def test_relabeling_ai_suggestion_persists_as_human_revision(tmp_path: Path, monkeypatch):
+    images = tmp_path / "images"
+    images.mkdir()
+    Image.new("RGB", (640, 480), "white").save(images / "sample.jpg")
+    store = ProjectStore(tmp_path / "workspace" / "projects")
+    monkeypatch.setattr(server, "store", store)
+    project = store.create({
+        "name": "Relabel test", "task": "detection", "labels": ["person", "car"],
+        "dataset_path": str(images), "model_max_side": 1536,
+    })
+    path = server.suggestion_path(project["id"], "sample.jpg")
+    path.parent.mkdir(parents=True)
+    path.write_text('{"revision_id":"initial-test","objects":[{"label":"person","bbox":[10,20,50,90],"confidence":0.9}]}')
+    client = TestClient(server.app)
+    proposed = client.get(f"/api/projects/{project['id']}/annotations", params={"image": "sample.jpg"}).json()
+    proposed["objects"][0]["label"] = "car"
+    saved = client.put(f"/api/projects/{project['id']}/annotations", json={
+        "image": "sample.jpg", "objects": proposed["objects"],
+    })
+    assert saved.status_code == 200
+    reloaded = client.get(f"/api/projects/{project['id']}/annotations", params={"image": "sample.jpg"}).json()
+    assert reloaded["status"] == "human_reviewed"
+    assert reloaded["objects"][0]["label"] == "car"
+    assert reloaded["objects"][0]["bbox"] == [10, 20, 50, 90]
+
+
 def test_locked_label_schema_cannot_be_changed(tmp_path: Path, monkeypatch):
     images = tmp_path / "images"
     images.mkdir()
