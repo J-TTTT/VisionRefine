@@ -84,15 +84,24 @@ VisionRefine 是一个本地优先的 AI 辅助多模态数据标注工具。它
 | 人工版本保护 | ✅ | AI 建议与人工确认结果分开保存，重新加载优先使用人工版本 |
 | 多模态项目建模 | 🧪 | 检测、实例分割、视觉定位、描述、VQA、OCR 与分类 |
 | 快速检测器与选择性 VLM 复核 | 🚧 | 开发中 |
-| 分割编辑器与通用导入导出 | 🚧 | 开发中 |
+| Dataset I/O 通用导入导出框架 | ✅ | 仅图片导入；COCO / YOLO / VOC / CVAT / Label Studio / Labelme 检测格式与原生快照双向转换 |
+| 多格式导出中心 | ✅ | 兼容性预检查、转换确认、同快照批量导出、预设、可取消/重试的持久化后台任务 |
+| 多来源合并与安全追加 | ✅ | 导入预览、类别映射、重复图冲突处理、追加新数据与导入历史；保留人工 / AI 版本 |
+| 分割编辑器与更多格式适配器 | 🚧 | 开发中 |
 
 ### 基本流程
 
 1. 新建项目，选择任务类型和候选标签。
-2. 指定本地图像目录；如有粗标注，可同时提供标注文件。
+2. 选择导入格式和本地根目录；可添加多个 COCO / YOLO / VOC / 图片来源，预览类别映射和重复冲突后确认导入。
 3. 查看自动生成的分辨率路由，配置兼容 OpenAI API 的视觉模型。
 4. 运行 AI 测试，或进入工作台进行人工校正。
 5. 保存人工检查版本；后续 AI 复核只生成建议，不覆盖人工结果。
+6. 选择一个或多个目标格式、数据划分和标注版本；检查兼容性并逐项确认转换，后台生成并下载标注包或含图像副本的数据集。
+7. 后续通过“追加数据”导入新批次或更新粗标注，不覆盖已有人工结果；“导入历史”记录每次操作。
+
+详见 [Dataset I/O 使用说明与扩展接口](docs/dataset-io.md)。输入与输出格式可以不同；默认只导出人工确认结果。
+
+新增格式的适用范围、原生包信任规则与开发模板见 [第一阶段格式中心](docs/format-center.md)。原生包默认重新导入为粗标注，只有明确勾选信任时才恢复审核状态；它不是完整项目备份。
 
 ## English
 
@@ -131,15 +140,22 @@ The workspace loads original-resolution regions on demand. Scroll to zoom and ri
 | Human revision protection | ✅ | AI suggestions stay separate; human-reviewed revisions win on reload |
 | Multimodal project modeling | 🧪 | Detection, instance segmentation, grounding, captioning, VQA, OCR, and classification |
 | Fast detectors and selective VLM review | 🚧 | In development |
-| Segmentation editors and general import/export | 🚧 | In development |
+| Dataset I/O framework | ✅ | Image-only import; COCO / YOLO / VOC / CVAT / Label Studio / Labelme detection and native snapshots |
+| Multi-format export center | ✅ | Compatibility consent, fixed-snapshot batches, presets, persistent cancel/retry jobs |
+| Multi-source merge and safe append | ✅ | Import preview, category mapping, duplicate conflict policies, append/history with human and AI preservation |
+| Segmentation editors and additional adapters | 🚧 | In development |
 
 ### Workflow
 
 1. Create a project and choose the task type and candidate labels.
-2. Select a local image directory and, optionally, an existing coarse annotation file.
+2. Select one or more local image/COCO/YOLO/VOC sources; preview category mappings and duplicate conflicts before committing.
 3. Review the generated resolution routes and configure an OpenAI-compatible vision model.
 4. Run an AI pilot or open the annotation workspace for human correction.
 5. Save the human-reviewed revision. Later AI passes remain suggestions and never overwrite it.
+6. Choose output formats, splits and revision policy; review compatibility, acknowledge conversions and download background-generated packages.
+7. Append later batches or coarse updates without overwriting human reviews; inspect the import operation history.
+
+See [Dataset I/O documentation](docs/dataset-io.md) for layouts, conversion limits and adapter development. Input and output formats are independent; exports default to human-reviewed data only.
 
 ## Quick start
 
@@ -167,7 +183,11 @@ Open **<http://127.0.0.1:8020>** and create your first project.
 - [ ] Fast detector adapters and candidate generation
 - [ ] Selective VLM verification and final auditing
 - [ ] Instance-segmentation editor
-- [ ] COCO, YOLO, Label Studio, and CVAT import/export
+- [x] Dataset I/O framework with COCO Detection, YOLO Detection and Pascal VOC Detection adapters
+- [x] Multi-source preview/merge, explicit category mapping, safe append and import history
+- [x] CVAT XML, Label Studio RectangleLabels, Labelme rectangles and native detection snapshots
+- [x] Compatibility preflight, multi-format export presets and persistent local export jobs
+- [ ] Additional task/format adapters: segmentation, keypoints, OCR, video and other detection conventions
 - [ ] Collaborative review and revision history
 
 ## Development

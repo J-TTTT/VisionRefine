@@ -3,6 +3,7 @@ let projects = [];
 let current = null;
 let createLabels = ["person"];
 let currentLabels = [];
+let datasetFormats = [];
 const detectionLabelOptions = [
   ["person", "行人"], ["vehicle", "车辆（合并类）"], ["car", "小汽车"], ["bus", "公交车"],
   ["truck", "卡车"], ["motorcycle", "摩托车"], ["bicycle", "自行车"], ["traffic light", "交通灯"],
@@ -154,6 +155,11 @@ function showCreate() {
 
 async function showProject(id) {
   current = await api(`/api/projects/${id}`);
+  $("annotationWorkspace").hidden = true;
+  $("exportStatus").textContent = "";
+  $("exportDownload").hidden = true;
+  $("importReport").hidden = true;
+  $("datasetHistory").hidden = true;
   $("createView").hidden = true;
   $("projectView").hidden = false;
   $("pageTitle").textContent = current.name;
@@ -168,6 +174,7 @@ async function showProject(id) {
 }
 
 function renderAnalysis() {
+  renderDatasetIO();
   const a = current.analysis;
   if (!a) return;
   $("statImages").textContent = a.image_count.toLocaleString();
@@ -213,24 +220,7 @@ async function analyze(id) {
 
 $("projectForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const error = $("formError");
-  error.textContent = "";
-  const submit = event.target.querySelector("button[type=submit]");
-  submit.disabled = true; submit.textContent = "正在分析…";
-  const data = Object.fromEntries(new FormData(event.target));
-  data.labels = labeledTasks.has(data.task) ? [...createLabels] : [];
-  data.model_max_side = Number(data.model_max_side);
-  if (!data.annotation_path) data.annotation_path = null;
-  try {
-    let project = await api("/api/projects", {method: "POST", body: JSON.stringify(data)});
-    project = await api(`/api/projects/${project.id}/analyze`, {method: "POST"});
-    projects.unshift(project); current = project;
-    await showProject(project.id);
-  } catch (e) {
-    error.textContent = e.message;
-  } finally {
-    submit.disabled = false; submit.textContent = "创建并分析数据";
-  }
+  if (openDatasetImport(false)) await previewDatasetImport();
 });
 
 $("newProject").onclick = showCreate;
@@ -262,6 +252,7 @@ async function saveProjectLabels() {
 $("projectForm").elements.task.addEventListener("change", event => {
   $("labelsField").hidden = !labeledTasks.has(event.target.value);
   renderCreateLabels();
+  renderImportFormats();
 });
 
 function renderCreateLabels() {
@@ -275,8 +266,8 @@ function renderCreateLabels() {
     renderCreateLabels();
   });
   $("createLabelChoices").hidden = !detection;
-  $("customCreateLabelRow").hidden = detection;
-  $("customCreateLabelRow").style.display = detection ? "none" : "grid";
+  $("customCreateLabelRow").hidden = false;
+  $("customCreateLabelRow").style.display = "grid";
 }
 
 function renderCurrentLabels() {
@@ -293,10 +284,10 @@ function renderCurrentLabels() {
     renderCurrentLabels();
   }, locked);
   $("currentLabelChoices").hidden = locked || !detection;
-  $("customCurrentLabelRow").hidden = locked || detection;
-  $("customCurrentLabelRow").style.display = locked || detection ? "none" : "grid";
+  $("customCurrentLabelRow").hidden = locked;
+  $("customCurrentLabelRow").style.display = locked ? "none" : "grid";
   $("saveLabels").hidden = locked;
-  $("labelSchemaStatus").textContent = locked ? "标签集合已锁定，AI 和人工只能使用这些标签。" : "检测开始前可以调整标签集合。";
+  $("labelSchemaStatus").textContent = locked ? "标签集合已锁定，AI 和人工只能使用这些标签。" : "导入标注、推理或人工保存前可以调整标签集合。";
 }
 
 $("addProjectLabel").onclick = () => addLabel("newProjectLabel", createLabels, renderCreateLabels);
@@ -930,6 +921,9 @@ $("saveAnnotations").onclick = async () => {
     const result = await api(`/api/projects/${current.id}/annotations`, {method: "PUT", body: JSON.stringify({image: editor.image, objects: editor.objects})});
     editor.objects = result.objects;
     editor.dirty = false;
+    editor.annotationStatus = result.status;
+    current.labels_locked = true;
+    renderCurrentLabels();
     status.textContent = `已保存 ${result.objects.length} 个框 · ${result.revision_id}`;
     drawDetail();
   } catch (error) { status.textContent = `保存失败：${error.message}`; }
@@ -990,5 +984,69 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 }
 
+function renderImportFormats() {
+  const select = $("datasetFormat"), previous = select.value;
+  const task = $("projectForm").elements.task.value;
+  select.innerHTML = datasetFormats.filter(f => f.can_import && f.tasks.includes(task))
+    .map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.title)}</option>`).join("");
+  if ([...select.options].some(o => o.value === previous)) select.value = previous;
+  updateImportFields();
+}
+
+function updateImportFields() {
+  const format = $("datasetFormat").value, annotated = format !== "images";
+  const spec = datasetFormats.find(f => f.id === format)?.input || {};
+  $("annotationSourceField").hidden = !annotated;
+  $("annotationSource").required = !!spec.required;
+  $("annotationSource").disabled = !annotated;
+  $("labelsField").hidden = annotated || !labeledTasks.has($("projectForm").elements.task.value);
+  $("annotationSource").placeholder = spec.placeholder || "可选的标注输入";
+  $("importSplit").disabled = !!spec.split_from_source;
+  $("datasetRootHint").textContent = spec.hint || "";
+}
+
+$("datasetFormat").onchange = updateImportFields;
+
+function renderDatasetIO() {
+  if (!current) return;
+  const formats = datasetFormats.filter(f => f.can_export && f.tasks.includes(current.task));
+  const previous = $("exportFormat").value;
+  $("exportFormat").innerHTML = formats.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.title)}</option>`).join("");
+  if (formats.some(f => f.id === previous)) $("exportFormat").value = previous;
+  $("exportDataset").disabled = !formats.length || !current.analysis;
+  const summary = current.import_summary;
+  const sourceTitle = current.dataset_format === "mixed" ? "多来源数据集" : datasetFormats.find(f => f.id === current.dataset_format)?.title || current.dataset_format;
+  $("datasetIOSummary").textContent = summary
+    ? `${sourceTitle} · ${summary.image_count} 张图像 · ${summary.object_count} 个导入框 · ${summary.issue_count} 项提示`
+    : "重新分析数据后可使用 Dataset I/O。";
+  if (!formats.length) $("datasetIOSummary").textContent += " 当前任务的格式适配器尚未开放。";
+  $("showImportReport").disabled = !current.dataset_revision;
+  $("appendDataset").disabled = !current.dataset_revision;
+  $("showDatasetHistory").disabled = !current.dataset_revision;
+  if (typeof renderExportCenter === "function") renderExportCenter();
+}
+
+$("showImportReport").onclick = async () => {
+  const target = $("importReport");
+  if (!target.hidden) { target.hidden = true; return; }
+  target.hidden = false;
+  target.textContent = "加载导入报告…";
+  const projectId = current.id;
+  try {
+    const dataset = await api(`/api/projects/${projectId}/dataset`);
+    if (current?.id === projectId) target.textContent = JSON.stringify(dataset.report, null, 2);
+  } catch (error) { target.textContent = error.message; }
+};
+
+$("datasetExportForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  await previewExportCenter();
+});
+
 renderCreateLabels();
+api("/api/dataset-formats").then(formats => {
+  datasetFormats = formats;
+  renderImportFormats();
+  if (current) renderDatasetIO();
+}).catch(error => { $("formError").textContent = `格式列表加载失败：${error.message}`; });
 loadProjects().catch(error => { $("formError").textContent = `服务连接失败：${error.message}`; });

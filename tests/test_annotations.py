@@ -97,16 +97,17 @@ def test_locked_label_schema_cannot_be_changed(tmp_path: Path, monkeypatch):
     assert response.status_code == 409
 
 
-def test_detection_project_rejects_arbitrary_labels(tmp_path: Path, monkeypatch):
+def test_detection_project_accepts_custom_dataset_labels(tmp_path: Path, monkeypatch):
     images = tmp_path / "images"
     images.mkdir()
     store = ProjectStore(tmp_path / "workspace" / "projects")
     monkeypatch.setattr(server, "store", store)
     response = TestClient(server.app).post("/api/projects", json={
-        "name": "Invalid detection label",
+        "name": "Custom detection label",
         "task": "detection",
         "labels": ["invented-object"],
         "dataset_path": str(images),
         "model_max_side": 1536,
     })
-    assert response.status_code == 400
+    assert response.status_code == 201
+    assert response.json()["labels"] == ["invented-object"]

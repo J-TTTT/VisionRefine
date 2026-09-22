@@ -4,6 +4,8 @@ import json
 import re
 import shutil
 import uuid
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +19,15 @@ class ProjectStore:
     def __init__(self, root: Path):
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
+        self._locks: dict[str, threading.RLock] = {}
+        self._locks_guard = threading.Lock()
+
+    @contextmanager
+    def locked(self, key: str):
+        with self._locks_guard:
+            lock = self._locks.setdefault(key, threading.RLock())
+        with lock:
+            yield
 
     def list(self) -> list[dict]:
         projects = []
@@ -27,8 +38,8 @@ class ProjectStore:
                 continue
         return sorted(projects, key=lambda row: row.get("created_at", ""), reverse=True)
 
-    def create(self, payload: dict) -> dict:
-        project_id = f"{_slug(payload['name'])}-{uuid.uuid4().hex[:8]}"
+    def create(self, payload: dict, *, project_id: str | None = None, persist: bool = True) -> dict:
+        project_id = project_id or f"{_slug(payload['name'])}-{uuid.uuid4().hex[:8]}"
         now = datetime.now(timezone.utc).isoformat()
         project = {
             "id": project_id,
@@ -38,22 +49,25 @@ class ProjectStore:
             "labels_locked": bool(payload.get("labels_locked", False)),
             "dataset_path": payload["dataset_path"],
             "annotation_path": payload.get("annotation_path") or None,
+            "dataset_format": payload.get("dataset_format", "images"),
+            "split": payload.get("split", "unspecified"),
             "model_max_side": int(payload.get("model_max_side", 1536)),
             "status": "imported",
             "created_at": now,
             "analysis": None,
             "ai_adapter": None,
         }
-        folder = self.root / project_id
-        folder.mkdir(parents=True)
-        (folder / "revisions").mkdir()
-        self.save(project)
+        if persist:
+            folder = self.root / project_id
+            folder.mkdir(parents=True)
+            (folder / "revisions").mkdir()
+            self.save(project)
         return project
 
     def save(self, project: dict) -> None:
         folder = self.root / project["id"]
         folder.mkdir(parents=True, exist_ok=True)
-        temp = folder / "project.json.tmp"
+        temp = folder / f"project-{uuid.uuid4().hex}.json.tmp"
         temp.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(folder / "project.json")
 

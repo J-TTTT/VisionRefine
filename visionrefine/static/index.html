@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VisionRefine</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=20260918-7">
+  <link rel="stylesheet" href="/assets/styles.css?v=format-center-1">
 </head>
 <body>
   <div class="app-shell">
@@ -47,17 +47,20 @@
             <div id="createLabelChips" class="label-chips"></div>
             <div id="createLabelChoices" class="label-choices"></div>
             <div class="label-add-row" id="customCreateLabelRow" hidden><input id="newProjectLabel" placeholder="输入自定义标签"><button type="button" class="secondary label-add" id="addProjectLabel" aria-label="添加标签">＋</button></div>
-            <small>点击选择检测类别；AI 和人工只能使用选中的标签。</small>
+            <small>选择常用类别或添加自定义标签。导入标注时使用文件中的类别。</small>
           </div>
-          <label>图像文件夹<input name="dataset_path" required placeholder="/Volumes/Dataset/images"></label>
-          <label>已有粗标注 <span class="optional">可选</span><input name="annotation_path" placeholder="COCO / YOLO / 通用 JSON 文件"></label>
+          <label>数据集导入格式<select name="dataset_format" id="datasetFormat"><option value="images">仅图片</option></select></label>
+          <label>数据集根目录<input name="dataset_path" required placeholder="/path/to/dataset"><small id="datasetRootHint">递归扫描本地图片。</small></label>
+          <label id="annotationSourceField" hidden>标注文件<input name="annotation_path" id="annotationSource" placeholder="/path/to/annotations.json"></label>
+          <label>默认数据划分<select name="split" id="importSplit"><option value="unspecified">未指定</option><option value="train">train</option><option value="val">val</option><option value="test">test</option></select><small>COCO / 仅图片使用此划分；YOLO 从 YAML 读取各划分。</small></label>
 
           <div class="section-heading compact"><span>02</span><div><h2>模型输入限制</h2><p>路由器据此决定整图、缩放或切片。</p></div></div>
           <label>模型最大输入边长
             <div class="number-field"><input name="model_max_side" type="number" min="256" max="8192" value="1536"><span>px</span></div>
           </label>
           <div id="formError" role="alert"></div>
-          <button class="primary submit" type="submit">创建并分析数据</button>
+          <button class="primary submit" type="submit">预览并导入数据</button>
+          <button class="secondary full" type="button" id="newDatasetImport">配置多来源 / 多划分导入</button>
         </form>
 
         <div class="workflow-pane">
@@ -80,6 +83,25 @@
           <div><span>最大尺寸</span><strong id="statSize">—</strong></div>
           <div><span>粗标注</span><strong id="statCoarse">—</strong></div>
         </div>
+        <section class="dataset-io-pane" id="datasetIOPanel">
+          <div class="pane-head"><div><h2>数据集导入 / 导出</h2><p id="datasetIOSummary"></p></div><div class="io-actions"><button class="secondary" id="appendDataset">追加数据</button><button class="secondary" id="showDatasetHistory">导入历史</button><button class="secondary" id="showImportReport">查看导入报告</button></div></div>
+          <pre id="importReport" class="io-report" hidden></pre>
+          <div id="datasetHistory" class="io-report" hidden></div>
+          <form id="datasetExportForm" class="dataset-export-form">
+            <label>导出格式<select id="exportFormat" required></select></label>
+            <label>标注版本<select id="exportPolicy"><option value="reviewed">仅人工确认（默认）</option><option value="reviewed_or_ai">人工确认 + AI 建议</option><option value="all_annotated">人工确认 + AI 建议 + 导入粗标注</option></select></label>
+            <label>数据划分（可多选）<select id="exportSplit" multiple size="3"><option value="" selected>全部</option><option value="train">train</option><option value="val">val</option><option value="test">test</option><option value="unspecified">未指定</option></select></label>
+            <label>图像文件<select id="exportImages"><option value="false">仅标注（附图像路径映射）</option><option value="true">包含图像副本</option></select></label>
+            <button type="submit" class="primary" id="exportDataset">检查导出兼容性</button>
+          </form>
+          <details class="format-list"><summary>同时导出更多格式 / 查看支持范围</summary><div id="extraExportFormats"></div></details>
+          <div class="export-presets"><label>导出预设<select id="exportPreset"><option value="">选择预设</option></select></label><input id="exportPresetName" placeholder="预设名称" aria-label="导出预设名称"><button id="saveExportPreset" class="secondary" type="button">保存当前预设</button></div>
+          <section id="exportPreflight" class="io-report" hidden><h3>导出兼容性预检查</h3><p id="exportPreflightSummary"></p><div id="exportPreflightFormats"></div><button id="confirmExport" type="button" class="primary" disabled>确认并后台导出</button></section>
+          <p class="hint">输入与输出格式可不同。导出使用已保存结果；人工保存的空标注图也会保留。仅标注包需要按路径映射补齐图片。</p>
+          <div id="exportStatus" role="status"></div>
+          <a id="exportDownload" hidden>下载导出 ZIP</a>
+          <details open><summary>导出任务与历史（刷新后仍保留）</summary><div id="exportJobs"></div></details>
+        </section>
         <div class="project-grid">
           <section class="route-pane">
             <div class="pane-head"><div><h2>分辨率路由结果</h2><p>根据图像尺寸、任务类型和模型输入上限生成。</p></div><button id="reanalyze" class="secondary">重新分析</button></div>
@@ -158,6 +180,24 @@
       </div>
     </form>
   </dialog>
-  <script src="/assets/app.js?v=20260918-7"></script>
+  <dialog id="datasetImportDialog" class="dataset-import-dialog">
+    <div class="dialog-head"><div><h2 id="datasetImportTitle">预览数据集导入</h2><p>来源可使用不同目录与格式；同名类别自动合并，异名类别由你映射。</p></div><button type="button" class="icon-button" id="closeDatasetImport" aria-label="关闭数据集导入">×</button></div>
+    <fieldset id="datasetImportInputs">
+      <div id="importSources"></div>
+      <button type="button" class="secondary" id="addImportSource">＋ 添加来源</button>
+      <label class="duplicate-policy">重复图片默认策略<select id="duplicatePolicy"><option value="keep_existing">保留原数据（默认）</option><option value="update_coarse">更新导入粗标注，保留人工 / AI 版本</option><option value="error">遇到重复就阻止提交</option></select><small>以文件 SHA-256 查重，不合并不同编码的相似图片。重复图片保留原划分，避免 train / val 泄漏。</small></label>
+      <section id="datasetImportPreview" hidden>
+        <h3>导入预览</h3><p id="importPreviewSummary"></p>
+        <p class="hint">下方类别映射或冲突策略修改后，需要重新预览才能提交。追加不会改动已有人工确认结果。</p>
+        <div id="importConflicts"></div>
+        <details><summary>来源检查报告</summary><div id="importSourceReports"></div></details>
+      </section>
+    </fieldset>
+    <p id="datasetImportStatus" role="status" aria-live="polite"></p>
+    <div class="dialog-actions"><button type="button" class="secondary" id="previewDatasetImport">检查并预览</button><button type="button" class="primary" id="commitDatasetImport" disabled>确认导入</button></div>
+  </dialog>
+  <script src="/assets/app.js?v=format-center-1"></script>
+  <script src="/assets/dataset-import.js?v=format-center-1"></script>
+  <script src="/assets/dataset-export.js?v=format-center-1"></script>
 </body>
 </html>

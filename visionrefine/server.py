@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import subprocess
 import threading
@@ -10,19 +11,30 @@ import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from io import BytesIO
+from functools import wraps
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from visionrefine.core.adapters import normalize_base_url, test_openai_compatible
 from visionrefine.core.initial_detection import build_tiles, run_tiled_detection
 from visionrefine.core.pilot import extract_jpeg_crop, run_detection_pilot
 from visionrefine.core.router import plan_image
 from visionrefine.core.store import ProjectStore
+from visionrefine.core.dataset_io import registry as dataset_registry
+from visionrefine.core.dataset_io.models import Annotation, Split, safe_relative_path
+from visionrefine.core.dataset_io.service import (
+    effective_annotation, export_dataset, image_location, load_dataset, persist_import, prepare_import,
+)
+from visionrefine.core.dataset_io.imports import (
+    ImportPlanInput, StalePreview, commit_import, dataset_history, preview_import,
+)
+from visionrefine.core.dataset_io.exports import ExportCenter, ExportOptions, ExportCommit, ExportPreset
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -34,11 +46,6 @@ TASKS = {
     "detection", "instance_segmentation", "grounding", "captioning",
     "vqa", "ocr", "classification",
 }
-DETECTION_LABELS = {
-    "person", "vehicle", "car", "bus", "truck", "motorcycle", "bicycle",
-    "traffic light", "stop sign", "fire hydrant", "bench", "backpack",
-    "umbrella", "handbag", "suitcase", "dog",
-}
 
 # Large local datasets are an explicit product requirement. The server only
 # reads dimensions during analysis; later pixel decoding is handled by bounded
@@ -49,6 +56,36 @@ app = FastAPI(title="VisionRefine", version="0.1.0")
 store = ProjectStore(WORKSPACE_ROOT / "projects")
 initial_detection_jobs: dict[str, dict] = {}
 initial_detection_lock = threading.Lock()
+_export_centers = {}
+_export_centers_lock = threading.Lock()
+
+
+def export_center():
+    with _export_centers_lock:
+        key = str(store.root.resolve())
+        if key not in _export_centers:
+            _export_centers[key] = ExportCenter(store)
+        return _export_centers[key]
+
+
+def export_api(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(404, "Project, export preview or job not found") from None
+        except (ValueError, OSError) as exc:
+            raise HTTPException(400, str(exc)) from None
+    return wrapped
+
+
+def project_transaction(function):
+    @wraps(function)
+    def wrapped(project_id: str, *args, **kwargs):
+        with store.locked(project_id):
+            return function(project_id, *args, **kwargs)
+    return wrapped
 
 
 class ProjectInput(BaseModel):
@@ -56,8 +93,10 @@ class ProjectInput(BaseModel):
     task: str
     dataset_path: str = Field(min_length=1)
     annotation_path: str | None = None
+    dataset_format: str = "images"
+    split: Split = "unspecified"
     model_max_side: int = Field(default=1536, ge=256, le=8192)
-    labels: list[str] = Field(default_factory=list, max_length=100)
+    labels: list[str] = Field(default_factory=list, max_length=10000)
 
 
 class AdapterInput(BaseModel):
@@ -68,16 +107,39 @@ class AdapterInput(BaseModel):
 
 
 class LabelsInput(BaseModel):
-    labels: list[str] = Field(min_length=1, max_length=100)
+    labels: list[str] = Field(min_length=1, max_length=10000)
+
+
+class DatasetImportInput(BaseModel):
+    format: str
+    annotation_path: str
+    split: Split = "unspecified"
+
+
+class DatasetExportInput(BaseModel):
+    format: str
+    policy: Literal["reviewed", "reviewed_or_ai", "all_annotated"] = "reviewed"
+    splits: list[Split] = Field(default_factory=list)
+    include_images: bool = False
 
 
 class AnnotationInput(BaseModel):
     image: str
     objects: list[dict] = Field(default_factory=list, max_length=100_000)
 
+    @field_validator("image")
+    @classmethod
+    def image_path_is_relative(cls, value):
+        return safe_relative_path(value)
+
 
 class InitialDetectionInput(BaseModel):
     image: str
+
+    @field_validator("image")
+    @classmethod
+    def image_path_is_relative(cls, value):
+        return safe_relative_path(value)
 
 
 @app.get("/api/health")
@@ -90,6 +152,11 @@ def list_projects() -> list[dict]:
     return store.list()
 
 
+@app.get("/api/dataset-formats")
+def dataset_formats() -> list[dict]:
+    return dataset_registry.capabilities()
+
+
 @app.post("/api/projects", status_code=201)
 def create_project(payload: ProjectInput) -> dict:
     if payload.task not in TASKS:
@@ -100,22 +167,40 @@ def create_project(payload: ProjectInput) -> dict:
     annotation = None
     if payload.annotation_path:
         annotation = Path(payload.annotation_path).expanduser().resolve()
-        if not annotation.is_file():
-            raise HTTPException(400, "Annotation file does not exist")
+        try:
+            kind = dataset_registry.get(payload.dataset_format, payload.task, "importer").input.get("kind", "file")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        if not (annotation.is_dir() if kind == "directory" else annotation.exists() if kind == "file_or_directory" else annotation.is_file()):
+            raise HTTPException(400, "Annotation input does not exist or has the wrong file/directory type")
     data = payload.model_dump()
     labels = []
     for raw_label in payload.labels:
         label = raw_label.strip()
         if label and label not in labels:
             labels.append(label)
+    format_id = payload.dataset_format
+    # Compatibility with the former coarse-annotation path field.
+    if annotation and format_id == "images":
+        format_id = "yolo_detection" if annotation.suffix.lower() in {".yaml", ".yml"} else "coco_detection"
+    imported = None
+    try:
+        dataset_registry.get(format_id, payload.task, "importer")
+        if format_id != "images":
+            imported = prepare_import(dataset, format_id, annotation, labels, payload.task, payload.split)
+            labels = [c.name for c in imported.categories]
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from None
     if payload.task in {"detection", "instance_segmentation", "grounding", "classification"} and not labels:
         raise HTTPException(400, "Add at least one label for this task")
-    if payload.task == "detection" and any(label not in DETECTION_LABELS for label in labels):
-        raise HTTPException(400, "Detection labels must be selected from the supported label catalog")
     data["labels"] = labels
     data["dataset_path"] = str(dataset)
     data["annotation_path"] = str(annotation) if annotation else None
-    return store.create(data)
+    data["dataset_format"] = format_id
+    project = store.create(data)
+    if imported is not None:
+        persist_import(store, project, imported)
+    return project
 
 
 @app.get("/api/projects/{project_id}")
@@ -127,6 +212,7 @@ def get_project(project_id: str) -> dict:
 
 
 @app.delete("/api/projects/{project_id}")
+@project_transaction
 def delete_project(project_id: str) -> dict:
     try:
         destination = store.delete(project_id)
@@ -141,6 +227,7 @@ def delete_project(project_id: str) -> dict:
 
 
 @app.put("/api/projects/{project_id}/labels")
+@project_transaction
 def save_labels(project_id: str, payload: LabelsInput) -> dict:
     try:
         project = store.get(project_id)
@@ -155,8 +242,6 @@ def save_labels(project_id: str, payload: LabelsInput) -> dict:
             labels.append(label)
     if not labels:
         raise HTTPException(400, "At least one label is required")
-    if project.get("task") == "detection" and any(label not in DETECTION_LABELS for label in labels):
-        raise HTTPException(400, "Detection labels must be selected from the supported label catalog")
     project["labels"] = labels
     store.save(project)
     return project
@@ -181,6 +266,7 @@ def test_adapter(project_id: str, payload: AdapterInput) -> dict:
 
 
 @app.put("/api/projects/{project_id}/adapter")
+@project_transaction
 def save_adapter(project_id: str, payload: AdapterInput) -> dict:
     try:
         project = store.get(project_id)
@@ -203,6 +289,7 @@ def save_adapter(project_id: str, payload: AdapterInput) -> dict:
 
 
 @app.post("/api/projects/{project_id}/pilot")
+@project_transaction
 def run_pilot(project_id: str) -> dict:
     try:
         project = store.get(project_id)
@@ -220,11 +307,8 @@ def run_pilot(project_id: str) -> dict:
     if not images:
         raise HTTPException(400, "Analyze the dataset before running a pilot")
 
-    root = Path(project["dataset_path"]).resolve()
     relative_path = images[0]["path"]
-    image_path = (root / relative_path).resolve()
-    if not image_path.is_relative_to(root) or not image_path.is_file():
-        raise HTTPException(404, "Pilot image not found")
+    _, image_path = project_image(project, relative_path)
     try:
         result = run_detection_pilot(
             image_path,
@@ -298,6 +382,7 @@ def latest_suggestion(project_id: str) -> dict:
 
 
 @app.post("/api/projects/{project_id}/analyze")
+@project_transaction
 def analyze_project(project_id: str) -> dict:
     try:
         project = store.get(project_id)
@@ -305,39 +390,45 @@ def analyze_project(project_id: str) -> dict:
         raise HTTPException(404, "Project not found") from None
 
     root = Path(project["dataset_path"])
-    image_paths = sorted(
-        p for p in root.rglob("*")
-        if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS and not p.name.startswith("._")
-    )
-    if not image_paths:
-        raise HTTPException(400, "No supported images were found")
-
-    has_coarse = bool(project.get("annotation_path"))
+    try:
+        dataset = load_dataset(store, project)
+        if dataset is None or project.get("dataset_format") == "images":
+            source = Path(project["annotation_path"]) if project.get("annotation_path") else None
+            format_id = project.get("dataset_format", "images")
+            if source and format_id == "images":
+                format_id = "yolo_detection" if source.suffix.lower() in {".yaml", ".yml"} else "coco_detection"
+            dataset = prepare_import(root, format_id, source, project.get("labels", []), project["task"], project.get("split", "unspecified"))
+            persist_import(store, project, dataset)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from None
+    has_coarse = any(image.status == "imported_coarse" for image in dataset.images)
     routes: Counter[str] = Counter()
     valid = []
     errors = []
     total_pixels = 0
-    for path in image_paths:
+    for record in dataset.images:
         try:
+            _, path = image_location(project, record, dataset)
             with Image.open(path) as image:
                 width, height = image.size
             route = plan_image(
                 width, height,
                 model_max_side=project["model_max_side"],
-                has_coarse_annotations=has_coarse,
+                has_coarse_annotations=bool(record.objects),
                 task=project["task"],
             )
             routes[route.strategy] += 1
             total_pixels += width * height
             valid.append({
-                "path": str(path.relative_to(root)),
+                "path": record.path,
+                "split": record.split,
                 "width": width,
                 "height": height,
                 "megapixels": round(width * height / 1_000_000, 2),
                 "route": route.to_dict(),
             })
-        except (OSError, UnidentifiedImageError) as exc:
-            errors.append({"path": str(path.relative_to(root)), "error": str(exc)})
+        except (OSError, ValueError, UnidentifiedImageError) as exc:
+            errors.append({"path": record.path, "error": str(exc)})
 
     if not valid:
         raise HTTPException(400, "Images were found but none could be read")
@@ -350,8 +441,8 @@ def analyze_project(project_id: str) -> dict:
         "max_width": max(row["width"] for row in valid),
         "max_height": max(row["height"] for row in valid),
         "routes": dict(routes),
-        "images": valid[:200],
-        "truncated": len(valid) > 200,
+        "images": valid,
+        "truncated": False,
         "errors": errors[:20],
     }
     project["analysis"] = analysis
@@ -361,9 +452,20 @@ def analyze_project(project_id: str) -> dict:
 
 
 def project_image(project: dict, relative_path: str) -> tuple[Path, Path]:
-    root = Path(project["dataset_path"]).resolve()
-    path = (root / relative_path).resolve()
-    if not path.is_relative_to(root) or not path.is_file():
+    try:
+        relative_path = safe_relative_path(relative_path)
+        dataset = load_dataset(store, project)
+        if dataset:
+            record = next((i for i in dataset.images if i.path == relative_path), None)
+            if record is None:
+                raise HTTPException(404, "Image is not in the dataset manifest")
+            root, path = image_location(project, record, dataset)
+        else:
+            root = Path(project["dataset_path"]).resolve()
+            path = (root / relative_path).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise HTTPException(404, "Image not found")
+    except (ValueError, OSError):
         raise HTTPException(404, "Image not found")
     return root, path
 
@@ -426,9 +528,10 @@ def _run_initial_detection_job(job_id: str, project_id: str, relative_path: str)
         temp = current_path.with_suffix(".tmp")
         temp.write_text(json.dumps(suggestion, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(current_path)
-        latest_project = store.get(project_id)
-        latest_project["status"] = "ai_suggested"
-        store.save(latest_project)
+        with store.locked(project_id):
+            latest_project = store.get(project_id)
+            latest_project["status"] = "ai_suggested"
+            store.save(latest_project)
         _update_initial_job(
             job_id, status="completed", completed_tiles=result["tile_count"],
             total_tiles=result["tile_count"], candidate_count=len(result["objects"]),
@@ -439,6 +542,7 @@ def _run_initial_detection_job(job_id: str, project_id: str, relative_path: str)
 
 
 @app.post("/api/projects/{project_id}/initial-detection", status_code=202)
+@project_transaction
 def start_initial_detection(project_id: str, payload: InitialDetectionInput) -> dict:
     try:
         project = store.get(project_id)
@@ -553,35 +657,23 @@ def get_annotations(project_id: str, image: str) -> dict:
     except KeyError:
         raise HTTPException(404, "Project not found") from None
     project_image(project, image)
-    path = annotation_path(project_id, image)
-    if path.is_file():
-        return json.loads(path.read_text(encoding="utf-8"))
-    current_suggestion = suggestion_path(project_id, image)
-    if current_suggestion.is_file():
-        suggestion = json.loads(current_suggestion.read_text(encoding="utf-8"))
-        return {
-            "image": image,
-            "objects": suggestion.get("objects", []),
-            "status": "ai_suggestion",
-            "revision_id": suggestion.get("revision_id"),
-        }
-    latest = project.get("latest_suggestion") or {}
-    if latest.get("image") == image:
-        revision_id = latest["revision_id"]
-        latest_path = store.root / project_id / "revisions" / revision_id / "suggestion.json"
-        if latest_path.is_file():
-            suggestion = json.loads(latest_path.read_text(encoding="utf-8"))
-            return {"image": image, "objects": suggestion.get("objects", []), "status": "ai_suggestion", "revision_id": revision_id}
-    return {"image": image, "objects": [], "status": "unreviewed", "revision_id": None}
+    try:
+        return effective_annotation(store, project, image)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
 
 
 @app.put("/api/projects/{project_id}/annotations")
+@project_transaction
 def save_annotations(project_id: str, payload: AnnotationInput) -> dict:
     try:
         project = store.get(project_id)
     except KeyError:
         raise HTTPException(404, "Project not found") from None
     _, image_path = project_image(project, payload.image)
+    dataset = load_dataset(store, project)
+    if dataset and not any(i.path == payload.image for i in dataset.images):
+        raise HTTPException(400, "Image is not in the imported dataset manifest")
     with Image.open(image_path) as image:
         image_width, image_height = image.size
     allowed = set(project.get("labels") or ["person"])
@@ -595,23 +687,36 @@ def save_annotations(project_id: str, payload: AnnotationInput) -> dict:
             x1, y1, x2, y2 = [float(value) for value in bbox]
         except (TypeError, ValueError):
             raise HTTPException(400, f"Invalid bbox at index {index}") from None
+        if not all(math.isfinite(v) for v in (x1, y1, x2, y2)):
+            raise HTTPException(400, f"Non-finite bbox at index {index}")
         x1, x2 = sorted((max(0, min(image_width, x1)), max(0, min(image_width, x2))))
         y1, y2 = sorted((max(0, min(image_height, y1)), max(0, min(image_height, y2))))
-        if x2 - x1 < 1 or y2 - y1 < 1:
+        if x2 <= x1 or y2 <= y1:
             raise HTTPException(400, f"Empty bbox at index {index}")
-        objects.append({
+        candidate = {
             "id": str(item.get("id") or f"human-{index}"),
+            "category_id": project["labels"].index(label),
             "label": label,
             "bbox": [x1, y1, x2, y2],
             "confidence": item.get("confidence"),
             "source": "human_reviewed",
-        })
+            "attributes": item.get("attributes", {}),
+            "provenance": item.get("provenance", {}),
+        }
+        try:
+            objects.append(Annotation.model_validate(candidate).model_dump())
+        except ValueError as exc:
+            raise HTTPException(400, f"Invalid object at index {index}: {exc}") from None
+    if len({o["id"] for o in objects}) != len(objects):
+        raise HTTPException(400, "Object IDs must be unique within an image")
+    parent = effective_annotation(store, project, payload.image, dataset)
     revision_id = datetime.now(timezone.utc).strftime("human-%Y%m%dT%H%M%S%fZ")
     document = {
         "image": payload.image,
         "objects": objects,
         "status": "human_reviewed",
         "revision_id": revision_id,
+        "parent_revision_id": parent.get("revision_id"),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     path = annotation_path(project_id, payload.image)
@@ -624,8 +729,57 @@ def save_annotations(project_id: str, payload: AnnotationInput) -> dict:
     temp.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(path)
     project["status"] = "human_reviewed"
+    project["labels_locked"] = True
     store.save(project)
     return document
+
+
+@app.get("/api/projects/{project_id}/dataset")
+def dataset_manifest(project_id: str) -> dict:
+    project = get_project(project_id)
+    dataset = load_dataset(store, project)
+    if dataset is None:
+        raise HTTPException(400, "Analyze the dataset first")
+    return dataset.model_dump()
+
+
+@app.post("/api/projects/{project_id}/dataset/import")
+@project_transaction
+def import_project_dataset(project_id: str, payload: DatasetImportInput) -> dict:
+    project = get_project(project_id)
+    folder = store.root / project_id
+    if project.get("labels_locked") or any((folder / "revisions").glob("*")):
+        raise HTTPException(409, "Create a new project to replace a dataset after importing annotations or starting review/inference")
+    try:
+        dataset = prepare_import(Path(project["dataset_path"]), payload.format,
+                                 Path(payload.annotation_path).expanduser().resolve(), project["labels"], project["task"], payload.split)
+        persist_import(store, project, dataset)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from None
+    return analyze_project(project_id)
+
+
+@app.post("/api/projects/{project_id}/dataset/export", status_code=201)
+@project_transaction
+def export_project_dataset(project_id: str, payload: DatasetExportInput) -> dict:
+    project = get_project(project_id)
+    try:
+        report = export_dataset(store, project, payload.format, payload.policy, payload.splits, payload.include_images)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from None
+    report["download_url"] = f"/api/projects/{project_id}/dataset/exports/{report['export_id']}"
+    return report
+
+
+@app.get("/api/projects/{project_id}/dataset/exports/{export_id}")
+def download_dataset_export(project_id: str, export_id: str):
+    get_project(project_id)
+    if not re.fullmatch(r"export-[0-9a-f]{32}", export_id):
+        raise HTTPException(404, "Export not found")
+    path = store.root / project_id / "exports" / f"{export_id}.zip"
+    if not path.is_file():
+        raise HTTPException(404, "Export not found")
+    return FileResponse(path, filename=f"{project_id}-{export_id}.zip", media_type="application/zip")
 
 
 @app.get("/api/projects/{project_id}/preview/{relative_path:path}")
@@ -634,11 +788,96 @@ def preview_image(project_id: str, relative_path: str):
         project = store.get(project_id)
     except KeyError:
         raise HTTPException(404, "Project not found") from None
-    root = Path(project["dataset_path"]).resolve()
-    path = (root / relative_path).resolve()
-    if not path.is_relative_to(root) or not path.is_file():
-        raise HTTPException(404, "Image not found")
+    _, path = project_image(project, relative_path)
     return FileResponse(path)
+
+
+@app.post("/api/dataset-imports/preview")
+def preview_dataset_import(payload: ImportPlanInput) -> dict:
+    try:
+        with store.locked(payload.project_id or "new-preview"):
+            return preview_import(store, payload)
+    except KeyError:
+        raise HTTPException(404, "Project not found") from None
+    except StalePreview as exc:
+        raise HTTPException(409, str(exc)) from None
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.post("/api/dataset-imports/{preview_id}/commit", status_code=201)
+def commit_dataset_import(preview_id: str) -> dict:
+    try:
+        return commit_import(store, preview_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "Import preview not found") from None
+    except StalePreview as exc:
+        raise HTTPException(409, str(exc)) from None
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@app.get("/api/projects/{project_id}/dataset/history")
+def project_dataset_history(project_id: str) -> list[dict]:
+    return dataset_history(store, get_project(project_id))
+
+
+@app.post("/api/projects/{project_id}/dataset/export/preview")
+@export_api
+def preview_export(project_id: str, payload: ExportOptions):
+    return export_center().preview(project_id, payload)
+
+
+@app.post("/api/projects/{project_id}/dataset/export/jobs", status_code=202)
+@export_api
+def start_export_job(project_id: str, payload: ExportCommit):
+    return export_center().start(project_id, payload)
+
+
+@app.get("/api/projects/{project_id}/dataset/export/jobs")
+@export_api
+def list_export_jobs(project_id: str):
+    return export_center().list(project_id)
+
+
+@app.get("/api/projects/{project_id}/dataset/export/jobs/{job_id}")
+@export_api
+def get_export_job(project_id: str, job_id: str):
+    return export_center().get(project_id, job_id)
+
+
+@app.post("/api/projects/{project_id}/dataset/export/jobs/{job_id}/cancel")
+@export_api
+def cancel_export_job(project_id: str, job_id: str):
+    return export_center().cancel(project_id, job_id)
+
+
+@app.post("/api/projects/{project_id}/dataset/export/jobs/{job_id}/retry", status_code=202)
+@export_api
+def retry_export_job(project_id: str, job_id: str):
+    return export_center().retry(project_id, job_id)
+
+
+@app.get("/api/projects/{project_id}/dataset/export/jobs/{job_id}/download")
+@export_api
+def download_export_job(project_id: str, job_id: str):
+    job = export_center().get(project_id, job_id)
+    path = store.root / project_id / "export-jobs" / f"{job_id}.zip"
+    if job["status"] not in {"completed", "partial"} or not path.is_file():
+        raise HTTPException(409, "Export bundle is not ready")
+    return FileResponse(path, filename=f"visionrefine-{job_id}.zip", media_type="application/zip")
+
+
+@app.get("/api/projects/{project_id}/dataset/export/presets")
+@export_api
+def get_export_presets(project_id: str):
+    return export_center().presets(project_id)
+
+
+@app.post("/api/projects/{project_id}/dataset/export/presets")
+@export_api
+def save_export_preset(project_id: str, payload: ExportPreset):
+    return export_center().save_preset(project_id, payload)
 
 
 app.mount("/assets", StaticFiles(directory=STATIC_ROOT), name="assets")
