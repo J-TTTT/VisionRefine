@@ -87,7 +87,7 @@ def preview_import(store, payload: ImportPlanInput) -> dict:
     if project and original is None:
         raise ValueError("Analyze the existing project once before appending a dataset")
     merged = original.model_copy(deep=True) if original else Dataset(task=task)
-    merged.schema_version = "2.0"
+    merged.schema_version = "3.0" if task == "instance_segmentation" else "2.0"
     if project:
         # Unlocked image-only projects may have edited labels since analysis.
         prior = {c.name: c for c in merged.categories}
