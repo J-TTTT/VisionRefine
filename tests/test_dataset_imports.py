@@ -79,6 +79,21 @@ def test_no_implicit_category_synonyms(client, tmp_path):
     assert [c["name"] for c in plan["categories"]] == ["pedestrian", "person"]
 
 
+def test_preview_and_commit_do_not_hash_image_or_annotation_files(client, tmp_path, monkeypatch):
+    import visionrefine.core.dataset_io.service as service
+
+    a = source(tmp_path / "a")
+
+    def unexpected_digest(path):
+        raise AssertionError(f"Import unexpectedly hashed {path}")
+
+    monkeypatch.setattr(service, "file_digest", unexpected_digest)
+    project = commit(client, preview(client, [a]))
+    dataset = load_dataset(server.store, project)
+    assert dataset.images[0].sha256 is None
+    assert dataset.provenance["source_sha256"] is None
+
+
 def test_multisource_ai_paths_and_manifest_survive_worker_save(client, tmp_path, monkeypatch):
     a, b = source(tmp_path / "a"), source(tmp_path / "b", "b", "red")
     project = commit(client, preview(client, [a, b]))
@@ -112,7 +127,7 @@ def test_append_preserves_human_empty_ai_and_old_category_ids(client, tmp_path):
     project = commit(client, preview(client, [first]))
     base = f"/api/projects/{project['id']}"
     # Preview before saving: a new human revision must not make the preview destructive.
-    second = source(tmp_path / "b", "b", "white", "car", "val")
+    second = source(tmp_path / "a", "a", "white", "car", "val")
     third = source(tmp_path / "c", "c", "blue", "car", "test")
     plan = preview(client, [second, third], project_id=project["id"], duplicate_policy="update_coarse")
     saved = client.put(base + "/annotations", json={"image": "a/same.png", "objects": []}).json()
@@ -143,21 +158,23 @@ def test_append_preserves_human_empty_ai_and_old_category_ids(client, tmp_path):
 
 @pytest.mark.parametrize("policy,count,allowed", [("keep_existing", 0, True), ("update_coarse", 1, True), ("error", 0, False)])
 def test_duplicate_policy_and_per_image_resolution(client, tmp_path, policy, count, allowed):
-    a, b = source(tmp_path / "a"), source(tmp_path / "b", "b", label="car", split="val")
-    plan = preview(client, [a, b], duplicate_policy=policy)
+    a = source(tmp_path / "a")
+    project = commit(client, preview(client, [a]))
+    plan = preview(client, [a], project_id=project["id"], duplicate_policy=policy)
     assert plan["summary"]["image_count"] == 1
     assert plan["summary"]["updated_coarse"] == count
     assert plan["commit_allowed"] == allowed
     if not allowed:
         response = client.post(f"/api/dataset-imports/{plan['preview_id']}/commit")
         assert response.status_code == 400
-        assert client.get("/api/projects").json() == []
-        plan = preview(client, [a, b], duplicate_policy="error", conflict_resolutions={"b/same.png": "keep_existing"})
+        assert [p["id"] for p in client.get("/api/projects").json()] == [project["id"]]
+        plan = preview(client, [a], project_id=project["id"], duplicate_policy="error",
+                       conflict_resolutions={"a/same.png": "keep_existing"})
     commit(client, plan)
 
 
 @pytest.mark.parametrize("change", ["image", "annotations", "new_file", "removed"])
-def test_stale_inputs_cannot_commit(client, tmp_path, change):
+def test_user_manages_changed_inputs_but_missing_images_cannot_commit(client, tmp_path, change):
     a = source(tmp_path / "a")
     plan = preview(client, [a])
     root = Path(a["root"])
@@ -170,8 +187,8 @@ def test_stale_inputs_cannot_commit(client, tmp_path, change):
     else:
         (root / "same.png").unlink()
     response = client.post(f"/api/dataset-imports/{plan['preview_id']}/commit")
-    assert response.status_code == 409, response.text
-    assert client.get("/api/projects").json() == []
+    assert response.status_code == (409 if change == "removed" else 201), response.text
+    assert bool(client.get("/api/projects").json()) == (change != "removed")
 
 
 def test_concurrent_previews_and_changed_source_identity(client, tmp_path):
@@ -308,17 +325,20 @@ def test_image_only_category_change_invalidates_append_preview(client, tmp_path)
     assert client.post(f"/api/dataset-imports/{plan['preview_id']}/commit").status_code == 409
 
 
-def test_raw_duplicate_never_erases_coarse_and_changed_pixels_block_append(client, tmp_path):
+def test_equal_file_bytes_from_different_sources_are_not_matched(client, tmp_path):
     a = source(tmp_path / "a")
     project = commit(client, preview(client, [a]))
     raw = dict(id="raw", root=a["root"], format="images", labels=["person"])
     plan = preview(client, [raw], project_id=project["id"], duplicate_policy="update_coarse")
-    assert plan["conflicts"][0]["action"] == "keep_existing"
+    assert plan["conflicts"] == []
+    assert plan["summary"]["image_count"] == 2
     assert plan["summary"]["object_count"] == 1
+    commit(client, plan)
     Image.new("RGB", (100, 80), "blue").save(Path(a["root"]) / "same.png")
+    raw["id"] = "raw2"
     response = client.post("/api/dataset-imports/preview", json=dict(project_id=project["id"], sources=[raw]))
-    assert response.status_code == 400
-    assert "changed on disk" in response.text
+    assert response.status_code == 200, response.text
+    assert response.json()["summary"]["image_count"] == 3
 
 
 @pytest.mark.parametrize("mapping", [{"unknown": "person"}, {"person": "  "}])

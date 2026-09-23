@@ -44,26 +44,28 @@ capability matrix, compatibility consent, export jobs, native trust and extensio
 
 - 同一项目可以混合多份 COCO JSON、YOLO YAML、VOC 目录及仅图片来源，各来源可位于
   不同本地目录。图片不会为了导入而复制；相同文件名、不同内容的图像可同时存在。
-- 使用流式 SHA-256 对文件内容查重，不是视觉相似检索：不同编码的同一画面可能被视为不同图像。
-- 重复图片默认“保留原数据”，也可逐张选择“更新导入粗标注”或“阻止提交”。只更新
+- 导入不扫描整个来源目录计算文件指纹，也不按图片内容去重。仅相同的来源标识与相对路径
+  视为同一张图；不同来源即使指向相同文件，也按两张图处理。用户负责图片、标注和划分的对应关系。
+- 同一路径冲突默认“保留原数据”，也可逐张选择“更新导入粗标注”或“阻止提交”。只更新
   manifest 中的粗标注，不修改 `annotations/`、`suggestions/` 或人工历史；显式人工空标注
   仍然优先。仅图片来源不能清空已有粗标注。
-- 重复图片始终保留原划分，不把同一文件同时分配到 train/val/test；来源顺序决定首份归属。
+- 同一路径冲突始终保留原划分；不同来源之间的重复图片与划分由用户自行检查。
   冲突表展示传入与原有划分、框数量及采用的策略。无差异的重复也会报告。
 - 来源标识用于命名空间，同一标识不能改指另一目录/标注输入。追加界面会自动生成新标识；
   有意复用来源时，可以输入与原来相同的标识。
-- 预览只保存临时计划，不创建或改动项目。提交前重新核验目录清单和文件内容指纹；
-  图片、标注、类别集合或数据集版本变化会返回 409，要求重新预览。
+- 预览只保存临时计划，不创建或改动项目。预览解析格式并确认引用图片可读取；
+  提交再次确认这些图片仍然存在，并检查项目类别集合与数据集版本。来源内容变化
+  不会被自动检测，预览后修改标注或替换图片时请重新预览。
   期间保存人工标注是允许的，提交会保留它。
 - 提交发布新的不可变 manifest，通过原子替换项目指针使其生效；同一预览重复提交不会
   重复追加。项目级锁防止本地服务内并发追加/人工保存相互覆盖。
 - 部分坏图/坏框可以跳过，错误必须在预览报告中确认；没有任何可读图像或类别目录非法
   则不允许导入。发现重复并选择“阻止提交”时也不会改动项目。
-- 预览和提交是同步操作。为检测输入变化，会扫描相关目录及读取文件内容，大数据集可能
-  耗时较长；不把图片一次性加载进内存。当前支持单进程本地服务，不支持多个服务进程
+- 预览和提交是同步操作。格式解析仍会读取标注和图片尺寸；仅图片模式以及部分格式
+  也会按该格式要求枚举图片，大数据集仍可能耗时较长。当前支持单进程本地服务，不支持多个服务进程
   共同写同一个 workspace。不要将 workspace 放在数据集根目录内。
-- 图片继续引用本地源文件，并非内容冻结副本；导入后不要移动、覆盖源文件。已记录指纹
-  的旧图片若被覆盖，后续追加会拒绝继续。导出含图片的 ZIP 可用于可搬移的独立数据包。
+- 图片继续引用本地源文件，并非内容冻结副本；导入后不要移动、覆盖源文件。
+  导出含图片的 ZIP 可用于可搬移的独立数据包。
 
 ### Export policies
 
@@ -90,7 +92,7 @@ implement selective VLM review or final AI auditing.
 - Dataset: `schema_version`, `task`, `categories`, `images`, `sources`, `provenance`, `report`.
 - Category: canonical integer `id`, `name`, original `source_id` and provenance.
 - Image: unique `id`, relative `path`, actual `width`/`height`, `split`, `status`, objects.
-  Schema 2.0 adds `source_id`, `source_path` and a file-byte `sha256`; `path` is a logical
+  Schema 2.0 adds `source_id`, `source_path` and an optional file-byte `sha256`; `path` is a logical
   stable key, not necessarily a physical relative path. Schema 1.0 remains readable.
 - Source: unique `id`, absolute local `root`, `format`, optional `annotation_path`, provenance.
 - Annotation v1: `kind=bbox`, `category_id`, `label`, pixel `bbox=[x1,y1,x2,y2]`,

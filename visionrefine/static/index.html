@@ -221,7 +221,7 @@
     <fieldset id="datasetImportInputs">
       <div id="importSources"></div>
       <button type="button" class="secondary" id="addImportSource">＋ 添加来源</button>
-      <label class="duplicate-policy">重复图片默认策略<select id="duplicatePolicy"><option value="keep_existing">保留原数据（默认）</option><option value="update_coarse">更新导入粗标注，保留人工 / AI 版本</option><option value="error">遇到重复就阻止提交</option></select><small>以文件 SHA-256 查重，不合并不同编码的相似图片。重复图片保留原划分，避免 train / val 泄漏。</small></label>
+      <label class="duplicate-policy">同一路径冲突策略<select id="duplicatePolicy"><option value="keep_existing">保留原数据（默认）</option><option value="update_coarse">更新导入粗标注，保留人工 / AI 版本</option><option value="error">遇到重复就阻止提交</option></select><small>仅同一来源标识和相对路径视为同一张图。不同来源不按文件内容去重；请自行保证图像与标注及数据划分正确。</small></label>
       <section id="datasetImportPreview" hidden>
         <h3>导入预览</h3><p id="importPreviewSummary"></p>
         <p class="hint">下方类别映射或冲突策略修改后，需要重新预览才能提交。追加不会改动已有人工确认结果。</p>
@@ -234,7 +234,7 @@
   </dialog>
   <script src="/assets/segmentation.js?v=segmentation-2"></script>
   <script src="/assets/app.js?v=coco-segmentation-1"></script>
-  <script src="/assets/dataset-import.js?v=coco-segmentation-1"></script>
+  <script src="/assets/dataset-import.js?v=import-path-1"></script>
   <script src="/assets/dataset-export.js?v=coco-segmentation-1"></script>
 </body>
 </html>

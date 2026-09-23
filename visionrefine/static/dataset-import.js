@@ -145,7 +145,7 @@ function renderImportPreview(preview) {
 async function previewDatasetImport() {
   importSession.preview = null;
   importBusy(true);
-  $("datasetImportStatus").textContent = "正在读取来源并计算文件指纹，大数据集可能需要一些时间…";
+  $("datasetImportStatus").textContent = "正在读取所选格式中的图像和标注，并检查图片是否存在…";
   try {
     const preview = await api("/api/dataset-imports/preview", {method: "POST", body: JSON.stringify(importPayload())});
     importSession.preview = preview;
@@ -159,7 +159,7 @@ $("commitDatasetImport").onclick = async () => {
   const preview = importSession.preview;
   if (!preview?.commit_allowed) return;
   importBusy(true);
-  $("datasetImportStatus").textContent = "正在复核文件指纹并提交…";
+  $("datasetImportStatus").textContent = "正在确认图片仍然存在并提交…";
   let committed = false;
   try {
     const project = await api(`/api/dataset-imports/${preview.preview_id}/commit`, {method: "POST"});

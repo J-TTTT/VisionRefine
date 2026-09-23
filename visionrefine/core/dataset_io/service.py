@@ -18,7 +18,8 @@ from .models import Annotation, Category, Dataset, ImageRecord, contained_path, 
 from .portable import file_digest, portable_dataset, redact
 
 
-def prepare_import(root: Path, format_id: str, source: Path | None, labels: list[str], task: str, split: str, *, trust_reviewed=False) -> Dataset:
+def prepare_import(root: Path, format_id: str, source: Path | None, labels: list[str], task: str, split: str, *,
+                   trust_reviewed=False, fingerprint_source=True) -> Dataset:
     adapter = registry.get(format_id, task, "importer")
     dataset = adapter.importer.read(root.resolve(), source, labels, split, **({"trust_reviewed": trust_reviewed} if format_id == "visionrefine" else {}))
     dataset.task = task
@@ -27,16 +28,17 @@ def prepare_import(root: Path, format_id: str, source: Path | None, labels: list
     dataset.provenance = {**dataset.provenance,
         "format": format_id, "imported_at": datetime.now(timezone.utc).isoformat(),
         "source_file": str(source) if source else None,
-        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest() if source and source.is_file() else None,
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest() if fingerprint_source and source and source.is_file() else None,
     }
     return dataset
 
 
-def persist_import(store, project: dict, dataset: Dataset, revision: str | None = None) -> dict:
-    for image in dataset.images:
-        if not image.sha256:
-            _, path = image_location(project, image, dataset)
-            image.sha256 = file_digest(path)
+def persist_import(store, project: dict, dataset: Dataset, revision: str | None = None, *, hash_images=True) -> dict:
+    if hash_images:
+        for image in dataset.images:
+            if not image.sha256:
+                _, path = image_location(project, image, dataset)
+                image.sha256 = file_digest(path)
     revision = revision or f"import-{uuid.uuid4().hex}"
     dataset.provenance["parent_revision_id"] = project.get("dataset_revision")
     dataset.provenance["revision_id"] = revision
