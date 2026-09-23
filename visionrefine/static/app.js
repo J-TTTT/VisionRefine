@@ -3,6 +3,7 @@ let projects = [];
 let current = null;
 let createLabels = ["person"];
 let currentLabels = [];
+let datasetFormats = [];
 const detectionLabelOptions = [
   ["person", "行人"], ["vehicle", "车辆（合并类）"], ["car", "小汽车"], ["bus", "公交车"],
   ["truck", "卡车"], ["motorcycle", "摩托车"], ["bicycle", "自行车"], ["traffic light", "交通灯"],
@@ -135,14 +136,19 @@ async function deleteProject(project) {
   try {
     await api(`/api/projects/${project.id}`, {method: "DELETE"});
     projects = projects.filter(item => item.id !== project.id);
-    if (current?.id === project.id) showCreate();
+    if (current?.id === project.id) showCreate(true);
     else renderProjectList();
   } catch (error) {
     alert(`删除失败：${error.message}`);
   }
 }
 
-function showCreate() {
+function confirmLeavingSegmentation() {
+  return !Segmentation.active() || $("annotationWorkspace").hidden || !Segmentation.dirty() || confirm("当前实例分割有未保存的修改，确定放弃并离开吗？");
+}
+
+function showCreate(force = false) {
+  if (force !== true && !confirmLeavingSegmentation()) return;
   current = null;
   $("createView").hidden = false;
   $("projectView").hidden = true;
@@ -153,7 +159,13 @@ function showCreate() {
 }
 
 async function showProject(id) {
+  if (!confirmLeavingSegmentation()) return;
   current = await api(`/api/projects/${id}`);
+  $("annotationWorkspace").hidden = true;
+  $("exportStatus").textContent = "";
+  $("exportDownload").hidden = true;
+  $("importReport").hidden = true;
+  $("datasetHistory").hidden = true;
   $("createView").hidden = true;
   $("projectView").hidden = false;
   $("pageTitle").textContent = current.name;
@@ -168,6 +180,7 @@ async function showProject(id) {
 }
 
 function renderAnalysis() {
+  renderDatasetIO();
   const a = current.analysis;
   if (!a) return;
   $("statImages").textContent = a.image_count.toLocaleString();
@@ -186,12 +199,18 @@ function renderAnalysis() {
     <tr><td title="${escapeHtml(row.path)}">${escapeHtml(row.path)}</td><td>${row.width} × ${row.height}</td><td>${row.megapixels}</td><td><span class="strategy">${routeNames[row.route.strategy] || row.route.strategy}${row.route.estimated_tiles > 1 ? ` · ${row.route.estimated_tiles}片` : ""}</span></td></tr>
   `).join("");
 
-  const steps = [
+  const steps = current.task === "instance_segmentation" ? [
+    ["数据分析", "已完成", true],
+    ["实例轮廓精修", "打开工作台绘制、改点或涂改掩码", false],
+    ["人工版本保存", current.status === "human_reviewed" ? "已有保存版本" : "等待人工确认", current.status === "human_reviewed"]
+  ] : [
     ["数据分析", "已完成", true],
     [a.has_coarse_annotations ? "AI 粗标注精修" : "AI 初始标注", current.ai_adapter ? `已配置 ${current.ai_adapter.model}` : "等待配置模型", false],
     ["查漏补缺", "未开始", false], ["人工检查", "未开始", false], ["AI 最终复核", "未开始", false]
   ];
   $("pipeline").innerHTML = steps.map((s, i) => `<div class="pipeline-step ${s[2] ? "done" : ""}"><span>${s[2] ? "✓" : i + 1}</span><div><strong>${s[0]}</strong><small>${s[1]}</small></div></div>`).join("");
+  $("startAI").hidden = current.task === "instance_segmentation";
+  $("runPilot").hidden = current.task === "instance_segmentation";
   $("runPilot").disabled = !current.ai_adapter;
   $("runPilot").title = current.ai_adapter ? "对首张图像的中心切片运行一次 AI 检测" : "请先配置 AI 适配器";
   $("runInitialDetection").disabled = !current.ai_adapter;
@@ -213,24 +232,7 @@ async function analyze(id) {
 
 $("projectForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const error = $("formError");
-  error.textContent = "";
-  const submit = event.target.querySelector("button[type=submit]");
-  submit.disabled = true; submit.textContent = "正在分析…";
-  const data = Object.fromEntries(new FormData(event.target));
-  data.labels = labeledTasks.has(data.task) ? [...createLabels] : [];
-  data.model_max_side = Number(data.model_max_side);
-  if (!data.annotation_path) data.annotation_path = null;
-  try {
-    let project = await api("/api/projects", {method: "POST", body: JSON.stringify(data)});
-    project = await api(`/api/projects/${project.id}/analyze`, {method: "POST"});
-    projects.unshift(project); current = project;
-    await showProject(project.id);
-  } catch (e) {
-    error.textContent = e.message;
-  } finally {
-    submit.disabled = false; submit.textContent = "创建并分析数据";
-  }
+  if (openDatasetImport(false)) await previewDatasetImport();
 });
 
 $("newProject").onclick = showCreate;
@@ -262,6 +264,7 @@ async function saveProjectLabels() {
 $("projectForm").elements.task.addEventListener("change", event => {
   $("labelsField").hidden = !labeledTasks.has(event.target.value);
   renderCreateLabels();
+  renderImportFormats();
 });
 
 function renderCreateLabels() {
@@ -275,8 +278,8 @@ function renderCreateLabels() {
     renderCreateLabels();
   });
   $("createLabelChoices").hidden = !detection;
-  $("customCreateLabelRow").hidden = detection;
-  $("customCreateLabelRow").style.display = detection ? "none" : "grid";
+  $("customCreateLabelRow").hidden = false;
+  $("customCreateLabelRow").style.display = "grid";
 }
 
 function renderCurrentLabels() {
@@ -293,10 +296,10 @@ function renderCurrentLabels() {
     renderCurrentLabels();
   }, locked);
   $("currentLabelChoices").hidden = locked || !detection;
-  $("customCurrentLabelRow").hidden = locked || detection;
-  $("customCurrentLabelRow").style.display = locked || detection ? "none" : "grid";
+  $("customCurrentLabelRow").hidden = locked;
+  $("customCurrentLabelRow").style.display = locked ? "none" : "grid";
   $("saveLabels").hidden = locked;
-  $("labelSchemaStatus").textContent = locked ? "标签集合已锁定，AI 和人工只能使用这些标签。" : "检测开始前可以调整标签集合。";
+  $("labelSchemaStatus").textContent = locked ? "标签集合已锁定，AI 和人工只能使用这些标签。" : "导入标注、推理或人工保存前可以调整标签集合。";
 }
 
 $("addProjectLabel").onclick = () => addLabel("newProjectLabel", createLabels, renderCreateLabels);
@@ -381,7 +384,9 @@ function canvasPoint(event, canvas) {
 
 async function openAnnotationWorkspace() {
   if (!current) return;
+  Segmentation.configure();
   const panel = $("annotationWorkspace");
+  if (Segmentation.active() && !panel.hidden) { panel.scrollIntoView({behavior: "smooth"}); return; }
   panel.hidden = false;
   $("workspaceStatus").textContent = "正在载入图像列表…";
   editor.images = await api(`/api/projects/${current.id}/images`);
@@ -392,6 +397,7 @@ async function openAnnotationWorkspace() {
 }
 
 async function loadEditorImage(path) {
+  Segmentation.reset();
   closeBoxLabelPanel();
   editor.image = path;
   editor.meta = editor.images.find(row => row.path === path);
@@ -408,17 +414,18 @@ async function loadEditorImage(path) {
   const annotation = await api(`/api/projects/${current.id}/annotations?image=${encodeURIComponent(path)}`);
   editor.objects = annotation.objects || [];
   editor.annotationStatus = annotation.status;
+  Segmentation.sync();
   editor.thumbnail.onload = () => refreshEditorCrop();
   editor.thumbnail.src = `/api/projects/${current.id}/thumbnail/${encodedPath(path)}?v=${Date.now()}`;
-  $("workspaceStatus").textContent = `${annotation.status} · ${editor.objects.length} 个框`;
+  $("workspaceStatus").textContent = `${annotation.status} · ${editor.objects.length} ${Segmentation.active() ? "个实例" : "个框"}`;
   updateDeleteButton();
 }
 
 function clampEditorView() {
   const meta = editor.meta;
   if (!meta) return;
-  editor.view.width = Math.max(256, Math.min(meta.width, Math.round(editor.view.width)));
-  editor.view.height = Math.max(256, Math.min(meta.height, Math.round(editor.view.height)));
+  editor.view.width = Math.max(Math.min(256, meta.width), Math.min(meta.width, Math.round(editor.view.width)));
+  editor.view.height = Math.max(Math.min(256, meta.height), Math.min(meta.height, Math.round(editor.view.height)));
   editor.view.x = Math.max(0, Math.min(meta.width - editor.view.width, editor.view.x));
   editor.view.y = Math.max(0, Math.min(meta.height - editor.view.height, editor.view.y));
 }
@@ -468,6 +475,9 @@ function drawDetail() {
     const screenWidth = (x2 - x1) * fit.scale;
     const screenHeight = (y2 - y1) * fit.scale;
     const color = categoryColor(object.label);
+    if (Segmentation.active()) {
+      Segmentation.drawObject(context, object, index, fit);
+    } else {
     if (index === editor.selected) {
       context.strokeStyle = "#ffffff";
       context.lineWidth = 7;
@@ -476,6 +486,8 @@ function drawDetail() {
     context.strokeStyle = color;
     context.lineWidth = index === editor.selected ? 4 : 2;
     context.strokeRect(screenX, screenY, screenWidth, screenHeight);
+
+    }
 
     // Keep labels attached to their boxes so both AI proposals and human boxes
     // remain identifiable while zooming and panning.
@@ -500,7 +512,11 @@ function drawDetail() {
     context.fillText(label, labelX + labelMetrics.paddingX, labelY + labelHeight / 2);
     context.textBaseline = "alphabetic";
   });
-  if (editor.selected >= 0) drawSelectionHandles(context, fit);
+  if (Segmentation.active()) {
+    Segmentation.drawHandles(context, fit);
+    Segmentation.drawOverlay(context, fit);
+    Segmentation.drawPreview(context, fit);
+  } else if (editor.selected >= 0) drawSelectionHandles(context, fit);
   if (editor.interaction?.kind === "create") {
     context.strokeStyle = "#20e080"; context.lineWidth = 3; context.setLineDash([8, 5]);
     const drag = editor.interaction;
@@ -580,6 +596,7 @@ function changeSelectedLabel(label) {
   const object = editor.selected >= 0 ? editor.objects[editor.selected] : null;
   if (!object || !label) return;
   if (object.label !== label) {
+    Segmentation.checkpoint();
     object.label = label;
     markEditorDirty();
   }
@@ -680,6 +697,7 @@ function cursorForHandle(handle) {
 }
 
 function setEditorTool(tool) {
+  if (Segmentation.active()) return Segmentation.setTool(tool);
   editor.tool = tool === "edit" ? "edit" : "draw";
   const drawing = editor.tool === "draw";
   $("drawBoxTool").classList.toggle("active", drawing);
@@ -697,7 +715,7 @@ function setEditorTool(tool) {
 
 function markEditorDirty() {
   editor.dirty = true;
-  $("workspaceStatus").textContent = `未保存 · ${editor.objects.length} 个框`;
+  $("workspaceStatus").textContent = `未保存 · ${editor.objects.length} ${Segmentation.active() ? "个实例" : "个框"}`;
 }
 
 function wait(milliseconds) {
@@ -747,6 +765,7 @@ $("drawBoxTool").onclick = () => setEditorTool("draw");
 $("editBoxTool").onclick = () => setEditorTool("edit");
 
 $("detailCanvas").addEventListener("pointerdown", event => {
+  if (Segmentation.active()) return Segmentation.pointerDown(event);
   const [x, y] = detailImagePoint(event);
   const [canvasX, canvasY] = canvasPoint(event, event.currentTarget);
   if (event.button === 2 || event.button === 1 || editor.spacePressed) {
@@ -801,6 +820,7 @@ $("detailCanvas").addEventListener("pointerdown", event => {
 });
 
 $("detailCanvas").addEventListener("pointermove", event => {
+  if (Segmentation.active()) return Segmentation.pointerMove(event);
   const [x, y] = detailImagePoint(event), interaction = editor.interaction;
   if (!interaction) {
     const [canvasX, canvasY] = canvasPoint(event, event.currentTarget);
@@ -838,6 +858,7 @@ $("detailCanvas").addEventListener("pointermove", event => {
 });
 
 $("detailCanvas").addEventListener("pointerup", event => {
+  if (Segmentation.active()) return Segmentation.pointerUp(event);
   const interaction = editor.interaction;
   if (!interaction) return;
   if (interaction.kind === "create") {
@@ -868,6 +889,7 @@ $("detailCanvas").addEventListener("pointerup", event => {
 });
 
 $("detailCanvas").addEventListener("pointercancel", event => {
+  if (Segmentation.active()) return Segmentation.cancelInteraction(event);
   editor.interaction = null;
   if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   event.currentTarget.style.cursor = "crosshair";
@@ -879,8 +901,8 @@ $("detailCanvas").addEventListener("wheel", event => {
   event.preventDefault();
   const [anchorX, anchorY] = detailImagePoint(event);
   const factor = event.deltaY < 0 ? 0.92 : 1 / 0.92;
-  const nextWidth = Math.max(256, Math.min(editor.meta.width, editor.view.width * factor));
-  const nextHeight = Math.max(256, Math.min(editor.meta.height, editor.view.height * factor));
+  const nextWidth = Math.max(Math.min(256, editor.meta.width), Math.min(editor.meta.width, editor.view.width * factor));
+  const nextHeight = Math.max(Math.min(256, editor.meta.height), Math.min(editor.meta.height, editor.view.height * factor));
   const rx = (anchorX - editor.view.x) / editor.view.width, ry = (anchorY - editor.view.y) / editor.view.height;
   editor.view.x = anchorX - rx * nextWidth; editor.view.y = anchorY - ry * nextHeight;
   editor.view.width = nextWidth; editor.view.height = nextHeight;
@@ -888,6 +910,7 @@ $("detailCanvas").addEventListener("wheel", event => {
 }, {passive: false});
 
 function deleteSelectedBox() {
+  if (Segmentation.active()) return Segmentation.deleteObject();
   if (editor.selected < 0) return;
   editor.objects.splice(editor.selected, 1);
   editor.selected = -1;
@@ -895,12 +918,16 @@ function deleteSelectedBox() {
   setEditorTool("draw");
 }
 
-function updateDeleteButton() { $("deleteBox").disabled = editor.selected < 0; }
+function updateDeleteButton() { $("deleteBox").disabled = editor.selected < 0; Segmentation.sync(); }
 $("deleteBox").onclick = deleteSelectedBox;
 document.addEventListener("keydown", event => {
   if (event.code === "Space" && !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) {
     editor.spacePressed = true;
     if (!$("annotationWorkspace").hidden) event.preventDefault();
+  }
+  if (Segmentation.active() && !$("annotationWorkspace").hidden && !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) {
+    Segmentation.keydown(event);
+    return;
   }
   if (event.key === "Delete" && !$("annotationWorkspace").hidden && !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) deleteSelectedBox();
   if (!$("annotationWorkspace").hidden && !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) {
@@ -911,28 +938,42 @@ document.addEventListener("keydown", event => {
 document.addEventListener("keyup", event => { if (event.code === "Space") editor.spacePressed = false; });
 $("workspaceImage").onchange = async event => {
   const nextImage = event.target.value;
-  if (editor.dirty && !confirm("当前图像有未保存的修改，确定切换图像并放弃这些修改吗？")) {
+  if ((editor.dirty || (Segmentation.active() && Segmentation.dirty())) && !confirm("当前图像有未保存的修改，确定切换图像并放弃这些修改吗？")) {
     event.target.value = editor.image;
     return;
   }
   await loadEditorImage(nextImage);
 };
 window.addEventListener("beforeunload", event => {
-  if (!editor.dirty) return;
+  if (!editor.dirty && !(Segmentation.active() && Segmentation.dirty())) return;
   event.preventDefault();
   event.returnValue = "";
 });
 $("saveAnnotations").onclick = async () => {
   if (!current || !editor.image) return;
-  const status = $("workspaceStatus");
+  if (Segmentation.active() && !Segmentation.canSave()) return;
+  const projectId = current.id, image = editor.image;
+  const submitted = JSON.stringify(editor.objects), segmentation = Segmentation.active();
+  const status = $("workspaceStatus"), button = $("saveAnnotations");
+  button.disabled = true;
   status.textContent = "正在保存…";
   try {
-    const result = await api(`/api/projects/${current.id}/annotations`, {method: "PUT", body: JSON.stringify({image: editor.image, objects: editor.objects})});
-    editor.objects = result.objects;
-    editor.dirty = false;
-    status.textContent = `已保存 ${result.objects.length} 个框 · ${result.revision_id}`;
+    const result = await api(`/api/projects/${projectId}/annotations`, {method: "PUT", body: JSON.stringify({image, objects: JSON.parse(submitted)})});
+    if (current?.id !== projectId || editor.image !== image) return;
+    const changed = JSON.stringify(editor.objects) !== submitted;
+    if (!changed) { editor.objects = result.objects; editor.dirty = false; }
+    editor.annotationStatus = result.status;
+    current.labels_locked = true;
+    current.status = result.status;
+    renderCurrentLabels();
+    status.textContent = changed
+      ? "提交时的版本已保存；当前还有新的未保存修改。"
+      : `已保存 ${result.objects.length} ${segmentation ? "个实例" : "个框"} · ${result.revision_id}`;
+    Segmentation.sync();
     drawDetail();
-  } catch (error) { status.textContent = `保存失败：${error.message}`; }
+  } catch (error) {
+    if (current?.id === projectId && editor.image === image) status.textContent = `保存失败：${error.message}`;
+  } finally { button.disabled = false; }
 };
 
 function adapterPayload() {
@@ -990,5 +1031,70 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 }
 
+function renderImportFormats() {
+  const select = $("datasetFormat"), previous = select.value;
+  const task = $("projectForm").elements.task.value;
+  select.innerHTML = datasetFormats.filter(f => f.can_import && f.tasks.includes(task))
+    .map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.title)}</option>`).join("");
+  if ([...select.options].some(o => o.value === previous)) select.value = previous;
+  updateImportFields();
+}
+
+function updateImportFields() {
+  const format = $("datasetFormat").value, annotated = format !== "images";
+  const spec = datasetFormats.find(f => f.id === format)?.input || {};
+  $("annotationSourceField").hidden = !annotated;
+  $("annotationSource").required = !!spec.required;
+  $("annotationSource").disabled = !annotated;
+  $("labelsField").hidden = annotated || !labeledTasks.has($("projectForm").elements.task.value);
+  $("annotationSource").placeholder = spec.placeholder || "可选的标注输入";
+  $("importSplit").disabled = !!spec.split_from_source;
+  $("datasetRootHint").textContent = spec.hint || "";
+}
+
+$("datasetFormat").onchange = updateImportFields;
+
+function renderDatasetIO() {
+  if (!current) return;
+  const formats = datasetFormats.filter(f => f.can_export && f.tasks.includes(current.task));
+  const previous = $("exportFormat").value;
+  $("exportFormat").innerHTML = formats.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.title)}</option>`).join("");
+  if (formats.some(f => f.id === previous)) $("exportFormat").value = previous;
+  $("exportDataset").disabled = !formats.length || !current.analysis;
+  const summary = current.import_summary;
+  const sourceTitle = current.dataset_format === "mixed" ? "多来源数据集" : datasetFormats.find(f => f.id === current.dataset_format)?.title || current.dataset_format;
+  $("datasetIOSummary").textContent = summary
+    ? `${sourceTitle} · ${summary.image_count} 张图像 · ${summary.object_count} 个导入框 · ${summary.issue_count} 项提示`
+    : "重新分析数据后可使用 Dataset I/O。";
+  if (!formats.length) $("datasetIOSummary").textContent += " 当前任务的格式适配器尚未开放。";
+  $("showImportReport").disabled = !current.dataset_revision;
+  $("appendDataset").disabled = !current.dataset_revision;
+  $("showDatasetHistory").disabled = !current.dataset_revision;
+  if (typeof renderExportCenter === "function") renderExportCenter();
+}
+
+$("showImportReport").onclick = async () => {
+  const target = $("importReport");
+  if (!target.hidden) { target.hidden = true; return; }
+  target.hidden = false;
+  target.textContent = "加载导入报告…";
+  const projectId = current.id;
+  try {
+    const dataset = await api(`/api/projects/${projectId}/dataset`);
+    if (current?.id === projectId) target.textContent = JSON.stringify(dataset.report, null, 2);
+  } catch (error) { target.textContent = error.message; }
+};
+
+$("datasetExportForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  await previewExportCenter();
+});
+
+Segmentation.init();
 renderCreateLabels();
+api("/api/dataset-formats").then(formats => {
+  datasetFormats = formats;
+  renderImportFormats();
+  if (current) renderDatasetIO();
+}).catch(error => { $("formError").textContent = `格式列表加载失败：${error.message}`; });
 loadProjects().catch(error => { $("formError").textContent = `服务连接失败：${error.message}`; });

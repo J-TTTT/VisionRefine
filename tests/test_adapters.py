@@ -26,7 +26,10 @@ def test_normalize_base_url():
         normalize_base_url("not-a-url")
 
 
-def test_openai_compatible_model_discovery():
+def test_openai_compatible_model_discovery(monkeypatch):
+    # Local fixture traffic must not go through a user's HTTP proxy.
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     server = ThreadingHTTPServer(("127.0.0.1", 0), ModelHandler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()

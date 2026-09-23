@@ -9,6 +9,7 @@ workspace/projects/*
 workspace/cache/*
 !workspace/cache/.gitkeep
 workspace/trash/
+workspace/import-previews/
 .env
 .env.*
 *.pem
