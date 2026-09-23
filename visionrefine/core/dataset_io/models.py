@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
+from visionrefine.core.segmentation import TileMask, mask_metrics, polygon_metrics
 
 Task = Literal["detection", "instance_segmentation", "grounding", "captioning", "vqa", "ocr", "classification"]
 Split = Literal["train", "val", "test", "unspecified"]
@@ -41,10 +42,13 @@ class Category(BaseModel):
 
 class Annotation(BaseModel):
     id: str
-    kind: Literal["bbox"] = "bbox"
+    kind: Literal["bbox", "polygon", "mask"] = "bbox"
     category_id: int
     label: str
-    bbox: list[float] = Field(min_length=4, max_length=4)
+    bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    polygons: list[list[list[float]]] | None = None
+    mask: TileMask | None = None
+    area: float | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
     source: RevisionSource = "imported_coarse"
     attributes: dict = Field(default_factory=dict)
@@ -52,6 +56,18 @@ class Annotation(BaseModel):
 
     @model_validator(mode="after")
     def valid_box(self):
+        if self.kind == "polygon":
+            if self.mask is not None or self.polygons is None:
+                raise ValueError("Polygon annotations require contours and cannot contain a mask")
+            self.bbox, self.area = polygon_metrics(self.polygons)
+        elif self.kind == "mask":
+            if self.polygons is not None or self.mask is None:
+                raise ValueError("Mask annotations require mask tiles and cannot contain contours")
+            self.bbox, self.area = mask_metrics(self.mask)
+        elif self.polygons is not None or self.mask is not None:
+            raise ValueError("Bounding-box annotations cannot contain segmentation geometry")
+        if self.bbox is None:
+            raise ValueError("Bounding-box annotation requires bbox")
         x1, y1, x2, y2 = self.bbox
         if not all(math.isfinite(v) for v in self.bbox) or x2 <= x1 or y2 <= y1:
             raise ValueError("bbox must be finite xyxy with positive area")
@@ -92,7 +108,7 @@ class DatasetSource(BaseModel):
 
 
 class Dataset(BaseModel):
-    schema_version: Literal["1.0", "2.0"] = "2.0"
+    schema_version: Literal["1.0", "2.0", "3.0"] = "2.0"
     task: Task = "detection"
     categories: list[Category] = Field(default_factory=list)
     images: list[ImageRecord] = Field(default_factory=list)
@@ -102,6 +118,8 @@ class Dataset(BaseModel):
 
     @model_validator(mode="after")
     def consistent(self):
+        if self.task == "instance_segmentation":
+            self.schema_version = "3.0"
         categories = {c.id: c.name for c in self.categories}
         if len(categories) != len(self.categories) or len(set(categories.values())) != len(categories):
             raise ValueError("Category IDs and names must be unique")
@@ -118,6 +136,10 @@ class Dataset(BaseModel):
             if len({o.id for o in image.objects}) != len(image.objects):
                 raise ValueError("Annotation IDs must be unique within each image")
             for obj in image.objects:
+                if self.task == "instance_segmentation" and obj.kind == "bbox":
+                    raise ValueError("An instance segmentation annotation requires a contour or mask")
+                if self.task == "detection" and obj.kind != "bbox":
+                    raise ValueError("Detection projects require bounding-box annotations")
                 if categories.get(obj.category_id) != obj.label:
                     raise ValueError("Annotation category does not match the category catalog")
                 x1, y1, x2, y2 = obj.bbox

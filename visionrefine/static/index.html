@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VisionRefine</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=format-center-1">
+  <link rel="stylesheet" href="/assets/styles.css?v=segmentation-2">
 </head>
 <body>
   <div class="app-shell">
@@ -136,7 +136,7 @@
         <section id="annotationWorkspace" class="annotation-workspace" hidden>
           <div class="workspace-toolbar">
             <label>图像<select id="workspaceImage"></select></label>
-            <label>新增框标签<select id="workspaceLabel" title="新绘制的框使用此标签"></select></label>
+            <label><span id="workspaceLabelCaption">新增框标签</span><select id="workspaceLabel" title="新绘制的框使用此标签"></select></label>
             <div class="editor-tools" role="group" aria-label="标注工具">
               <button class="secondary active" id="drawBoxTool" type="button" aria-pressed="true" title="新增框（N）">＋ 新增框</button>
               <button class="secondary" id="editBoxTool" type="button" aria-pressed="false" title="编辑框（V）">编辑框</button>
@@ -145,6 +145,42 @@
             <button class="secondary" id="deleteBox" disabled>删除选中框</button>
             <button class="primary" id="saveAnnotations">保存人工检查</button>
             <span id="workspaceStatus" aria-live="polite"></span>
+          </div>
+          <div id="segmentationTools" class="segmentation-tools" hidden>
+            <button class="secondary" id="finishContour" type="button">完成轮廓 ↵</button>
+            <button class="secondary" id="cancelContour" type="button">取消轮廓 Esc</button>
+            <button class="secondary" id="appendContour" type="button">追加轮廓</button>
+            <button class="secondary" id="deleteVertex" type="button">删除顶点</button>
+            <button class="secondary" id="deleteContour" type="button">删除此轮廓</button>
+            <span class="tool-divider"></span>
+            <button class="secondary" id="newMask" type="button">＋ 画笔实例</button>
+            <button class="secondary" id="brushMask" type="button" aria-pressed="false">画笔 B</button>
+            <button class="secondary" id="eraseMask" type="button" aria-pressed="false">橡皮擦 E</button>
+            <label>半径 <input id="brushRadius" type="number" min="1" max="256" value="12" aria-label="画笔半径（原图像素）"> px</label>
+            <button class="secondary" id="segUndo" type="button">撤销</button>
+            <button class="secondary" id="segRedo" type="button">重做</button>
+            <span id="segSelection" aria-live="polite"></span>
+          </div>
+          <div id="segmentationOperations" class="segmentation-operations" hidden>
+            <strong>轮廓调整</strong>
+            <button class="secondary" id="segSmooth" type="button">平滑</button>
+            <button class="secondary" id="segShrink" type="button">收缩</button>
+            <button class="secondary" id="segExpand" type="button">扩张</button>
+            <label>调整半径 <input id="segEditRadius" type="number" min="1" max="64" value="3" aria-label="轮廓调整半径（原图像素）"> px</label>
+            <button class="secondary" id="segSnap" type="button">智能贴边</button>
+            <label>最大移动 <input id="segSnapDistance" type="number" min="1" max="32" value="10" aria-label="贴边最大移动距离（原图像素）"> px</label>
+            <label><input id="segProtectHoles" type="checkbox" checked>保护孔洞</label>
+            <span class="tool-divider"></span>
+            <strong>实例组合</strong>
+            <button class="secondary" id="segMerge" type="button" title="在选择模式中按 Ctrl 或 ⌘ 点击多个实例">合并所选</button>
+            <button class="secondary" id="segCutTool" type="button" aria-pressed="false">画分割线</button>
+            <button class="secondary" id="segSplit" type="button">拆分实例</button>
+            <small>拆分前可画线；直接拆分会按不相连区域分开。</small>
+            <div id="segOperationPreview" class="seg-operation-preview" hidden>
+              <span id="segOperationSummary" role="status"></span>
+              <button class="primary" id="segApplyPreview" type="button">应用预览</button>
+              <button class="secondary" id="segCancelPreview" type="button">取消</button>
+            </div>
           </div>
           <div class="viewer-grid">
             <section class="image-editor">
@@ -196,7 +232,8 @@
     <p id="datasetImportStatus" role="status" aria-live="polite"></p>
     <div class="dialog-actions"><button type="button" class="secondary" id="previewDatasetImport">检查并预览</button><button type="button" class="primary" id="commitDatasetImport" disabled>确认导入</button></div>
   </dialog>
-  <script src="/assets/app.js?v=format-center-1"></script>
+  <script src="/assets/segmentation.js?v=segmentation-2"></script>
+  <script src="/assets/app.js?v=segmentation-2"></script>
   <script src="/assets/dataset-import.js?v=format-center-1"></script>
   <script src="/assets/dataset-export.js?v=format-center-1"></script>
 </body>

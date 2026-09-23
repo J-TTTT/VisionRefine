@@ -87,7 +87,8 @@ VisionRefine 是一个本地优先的 AI 辅助多模态数据标注工具。它
 | Dataset I/O 通用导入导出框架 | ✅ | 仅图片导入；COCO / YOLO / VOC / CVAT / Label Studio / Labelme 检测格式与原生快照双向转换 |
 | 多格式导出中心 | ✅ | 兼容性预检查、转换确认、同快照批量导出、预设、可取消/重试的持久化后台任务 |
 | 多来源合并与安全追加 | ✅ | 导入预览、类别映射、重复图冲突处理、追加新数据与导入历史；保留人工 / AI 版本 |
-| 分割编辑器与更多格式适配器 | 🚧 | 开发中 |
+| 实例分割人工工作台 | ✅ | 多段多边形、画笔/橡皮擦、边界平滑/收缩/扩张/智能贴边、合并/拆分、撤销重做与人工版本保存 |
+| 分割格式与模型适配器 | 🚧 | 后续扩展 |
 
 ### 基本流程
 
@@ -102,6 +103,8 @@ VisionRefine 是一个本地优先的 AI 辅助多模态数据标注工具。它
 详见 [Dataset I/O 使用说明与扩展接口](docs/dataset-io.md)。输入与输出格式可以不同；默认只导出人工确认结果。
 
 新增格式的适用范围、原生包信任规则与开发模板见 [第一阶段格式中心](docs/format-center.md)。原生包默认重新导入为粗标注，只有明确勾选信任时才恢复审核状态；它不是完整项目备份。
+
+实例分割的创建步骤、快捷键和数据边界见 [实例分割工作台](docs/instance-segmentation.md)。
 
 ## English
 
@@ -143,7 +146,8 @@ The workspace loads original-resolution regions on demand. Scroll to zoom and ri
 | Dataset I/O framework | ✅ | Image-only import; COCO / YOLO / VOC / CVAT / Label Studio / Labelme detection and native snapshots |
 | Multi-format export center | ✅ | Compatibility consent, fixed-snapshot batches, presets, persistent cancel/retry jobs |
 | Multi-source merge and safe append | ✅ | Import preview, category mapping, duplicate conflict policies, append/history with human and AI preservation |
-| Segmentation editors and additional adapters | 🚧 | In development |
+| Instance segmentation workspace | ✅ | Multipart polygons, sparse brush/eraser masks, edge refinement, merge/split, undo/redo and human revisions |
+| Segmentation format and model adapters | 🚧 | Planned extensions |
 
 ### Workflow
 
@@ -182,7 +186,7 @@ Open **<http://127.0.0.1:8020>** and create your first project.
 - [x] Separate AI and human revisions
 - [ ] Fast detector adapters and candidate generation
 - [ ] Selective VLM verification and final auditing
-- [ ] Instance-segmentation editor
+- [x] Instance-segmentation editor: polygons, sparse masks, brush/eraser and human revisions
 - [x] Dataset I/O framework with COCO Detection, YOLO Detection and Pascal VOC Detection adapters
 - [x] Multi-source preview/merge, explicit category mapping, safe append and import history
 - [x] CVAT XML, Label Studio RectangleLabels, Labelme rectangles and native detection snapshots

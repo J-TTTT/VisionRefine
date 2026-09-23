@@ -142,6 +142,25 @@ class InitialDetectionInput(BaseModel):
         return safe_relative_path(value)
 
 
+@app.post("/api/projects/{project_id}/segmentation/preview")
+def preview_segmentation_edit(project_id: str, payload: dict) -> dict:
+    project = get_project(project_id)
+    if project.get("task") != "instance_segmentation":
+        raise HTTPException(400, "This operation requires an instance segmentation project")
+    try:
+        from visionrefine.core.segmentation_edit import EditOptions, preview_edit
+    except ImportError:
+        raise HTTPException(503, "Install the segmentation dependencies: pip install -e '.[segmentation]'") from None
+    try:
+        options = EditOptions.model_validate(payload)
+        _, image_path = project_image(project, safe_relative_path(options.image))
+        with Image.open(image_path) as source:
+            image_size = source.size
+        return preview_edit(options, image_path, image_size, project.get("labels") or [])
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {"ok": True, "version": "0.1.0"}
@@ -680,6 +699,23 @@ def save_annotations(project_id: str, payload: AnnotationInput) -> dict:
     objects = []
     for index, item in enumerate(payload.objects):
         label = str(item.get("label", "")).strip()
+        if project.get("task") == "instance_segmentation":
+            if label not in allowed or item.get("kind") not in {"polygon", "mask"}:
+                raise HTTPException(400, f"Invalid instance at index {index}: contour or mask and a project label required")
+            try:
+                instance = Annotation.model_validate({
+                    **item, "id": str(item.get("id") or f"human-{index}"), "label": label,
+                    "category_id": project["labels"].index(label), "source": "human_reviewed",
+                })
+                x1, y1, x2, y2 = instance.bbox
+                if x1 < 0 or y1 < 0 or x2 > image_width or y2 > image_height:
+                    raise ValueError("Instance geometry is outside the original image")
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(400, f"Invalid instance at index {index}: {exc}") from None
+            objects.append(instance.model_dump())
+            continue
+        if item.get("kind", "bbox") != "bbox" or item.get("mask") is not None or item.get("polygons") is not None:
+            raise HTTPException(400, "This task requires bounding-box annotations")
         bbox = item.get("bbox")
         if label not in allowed or not isinstance(bbox, list) or len(bbox) != 4:
             raise HTTPException(400, f"Invalid object at index {index}")
@@ -719,6 +755,8 @@ def save_annotations(project_id: str, payload: AnnotationInput) -> dict:
         "parent_revision_id": parent.get("revision_id"),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    if project.get("task") == "instance_segmentation":
+        document["annotation_schema_version"] = "2.0"
     path = annotation_path(project_id, payload.image)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():

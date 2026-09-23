@@ -22,6 +22,8 @@ def prepare_import(root: Path, format_id: str, source: Path | None, labels: list
     adapter = registry.get(format_id, task, "importer")
     dataset = adapter.importer.read(root.resolve(), source, labels, split, **({"trust_reviewed": trust_reviewed} if format_id == "visionrefine" else {}))
     dataset.task = task
+    if task == "instance_segmentation":
+        dataset.schema_version = "3.0"
     dataset.provenance = {**dataset.provenance,
         "format": format_id, "imported_at": datetime.now(timezone.utc).isoformat(),
         "source_file": str(source) if source else None,
