@@ -103,7 +103,9 @@ class ExportCenter:
                 except ValueError as exc:
                     issues, version = [issue("unsupported_format", str(exc), severity="blocking")], None
                 formats.append(dict(format=format_id, version=version, issues=issues,
-                    preserved=["图片选择", "类别名称", "普通矩形框", "显式人工空标注"],
+                    preserved=(["图片选择", "类别名称", "实例轮廓与掩码", "孔洞及分离区域", "显式人工空标注"]
+                               if project["task"] == "instance_segmentation" else
+                               ["图片选择", "类别名称", "普通矩形框", "显式人工空标注"]),
                     blocked=any(i["severity"] == "blocking" for i in issues)))
             preview_id = uuid.uuid4().hex
             result = dict(preview_id=preview_id, created_at=now(), project_id=project_id,

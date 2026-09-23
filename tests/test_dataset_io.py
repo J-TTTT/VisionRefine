@@ -235,7 +235,7 @@ def test_unsupported_task_or_format_fails_explicitly(client, tmp_path):
     with pytest.raises(ValueError):
         registry.get("cvat", "detection", "exporter")
     formats = client.get("/api/dataset-formats").json()
-    assert {f["id"] for f in formats if f["can_export"]} == {"coco_detection", "yolo_detection", "voc_detection", "cvat_detection", "label_studio_detection", "labelme_detection", "visionrefine"}
+    assert {f["id"] for f in formats if f["can_export"]} == {"coco_detection", "coco_segmentation", "yolo_detection", "voc_detection", "cvat_detection", "label_studio_detection", "labelme_detection", "visionrefine"}
 
 
 def test_import_cannot_replace_human_or_imported_versions(client, tmp_path):

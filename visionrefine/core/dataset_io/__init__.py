@@ -1,5 +1,6 @@
 """Task-scoped, versioned adapters. Register here, never in the UI."""
 from .coco import CocoDetection
+from .coco_segmentation import CocoSegmentation
 from .common import ImagesImporter
 from .native import NativeDataset
 from .registry import Format, FormatRegistry
@@ -10,6 +11,13 @@ from .tool_formats import CvatDetection, LabelmeDetection, LabelStudioDetection
 registry = FormatRegistry()
 registry.register(Format("images", "仅图片", ("detection", "instance_segmentation", "grounding", "captioning", "vqa", "ocr", "classification"), ImagesImporter(),
     geometries=(), input=dict(kind="none", required=False, labels=True, hint="递归扫描本地图片；非检测任务目前仅建立图像清单。")))
+registry.register(Format("coco_segmentation", "COCO Instance Segmentation", ("instance_segmentation",),
+    CocoSegmentation(), CocoSegmentation(), version="COCO polygon + compressed RLE", geometries=("polygon", "mask"),
+    attributes=("iscrowd",), preserves_splits=True, status="tested",
+    input=dict(kind="file", required=True, labels=False, hint="选择 COCO instances JSON；图片根目录对应 file_name。支持多边形与压缩/未压缩 RLE。",
+               placeholder="/path/to/instances.json"),
+    limitations=("复杂或越界多边形导入为像素掩码；超过 4096 块的掩码无法导入。", "整图 RLE 不支持超过 2³²−1 像素的图像。"),
+    reference="https://github.com/cocodataset/cocoapi"))
 
 
 def detection(id, title, adapter, *, version, attributes=(), confidence=False, splits=False, kind="file", required=True,

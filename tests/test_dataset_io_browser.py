@@ -47,7 +47,7 @@ def test_import_edit_export_in_browser(tmp_path, monkeypatch):
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(f"http://127.0.0.1:{port}")
-                page.wait_for_function("datasetFormats.length === 8")
+                page.wait_for_function("datasetFormats.length === 9")
                 def confirm_export():
                     playwright.expect(page.locator("#exportPreflight")).to_be_visible()
                     for checkbox in page.locator("#exportPreflightFormats input[type=checkbox]").all():

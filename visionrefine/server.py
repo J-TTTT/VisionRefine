@@ -201,7 +201,8 @@ def create_project(payload: ProjectInput) -> dict:
     format_id = payload.dataset_format
     # Compatibility with the former coarse-annotation path field.
     if annotation and format_id == "images":
-        format_id = "yolo_detection" if annotation.suffix.lower() in {".yaml", ".yml"} else "coco_detection"
+        format_id = ("coco_segmentation" if payload.task == "instance_segmentation" else
+                     "yolo_detection" if annotation.suffix.lower() in {".yaml", ".yml"} else "coco_detection")
     imported = None
     try:
         dataset_registry.get(format_id, payload.task, "importer")

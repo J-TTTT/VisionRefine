@@ -19,7 +19,7 @@ from visionrefine.core.dataset_io.native import NativeDataset
 from visionrefine.core.dataset_io.portable import extract_native
 from visionrefine.core.dataset_io.tool_formats import CvatDetection, LabelmeDetection, LabelStudioDetection
 
-FORMATS = [f["id"] for f in registry.capabilities() if f["can_export"]]
+FORMATS = [f["id"] for f in registry.capabilities() if f["can_export"] and "detection" in f["tasks"]]
 
 
 @pytest.fixture
@@ -85,9 +85,9 @@ def unpack(project, report, destination):
 
 def test_capabilities_metadata(project):
     formats=project[0].get("/api/dataset-formats").json()
-    assert len(formats)==8
+    assert len(formats)==9
     assert all("version" in f and "status" in f and "input" in f for f in formats)
-    assert all(f["geometries"]==["bbox"] for f in formats if f["can_export"])
+    assert all(f["geometries"]==["bbox"] for f in formats if f["can_export"] and "detection" in f["tasks"])
 
 
 def test_preflight_requires_each_conversion_confirmation(project):

@@ -53,7 +53,7 @@ async function previewExportCenter() {
     if(current?.id!==id||generation!==exportSession.generation)return;
     exportSession.preview=preview;
     $("exportPreflight").hidden=false;
-    $("exportPreflightSummary").textContent=`${preview.image_count} 张图片 / ${preview.object_count} 个框 / ${preview.category_count} 类；划分 ${Object.entries(preview.splits).map(([s,n])=>`${s}:${n}`).join(" · ")}。${preview.snapshot_note}`;
+    $("exportPreflightSummary").textContent=`${preview.image_count} 张图片 / ${preview.object_count} ${current.task==="instance_segmentation"?"个实例":"个框"} / ${preview.category_count} 类；划分 ${Object.entries(preview.splits).map(([s,n])=>`${s}:${n}`).join(" · ")}。${preview.snapshot_note}`;
     $("exportPreflightFormats").innerHTML=preview.formats.map(f=>`<section><h4>${escapeHtml(datasetFormats.find(a=>a.id===f.format)?.title||f.format)}</h4><p>保留：${escapeHtml(f.preserved.join("、"))}</p>${f.issues.map(i=>`<label class="export-issue ${escapeHtml(i.severity)}">${i.requires_ack?`<input type="checkbox" data-ack-format="${escapeHtml(f.format)}" data-ack-code="${escapeHtml(i.code)}">`:""}<span>${escapeHtml(i.message)} ${i.count>1?`（${i.count} 项）`:""}${i.examples.length?`<small>${escapeHtml(i.examples.join("、"))}</small>`:""}${i.requires_ack?" 我已了解并允许此项转换。":""}</span></label>`).join("")}</section>`).join("");
     $("exportPreflightFormats").onchange=updateExportConfirmation;
     updateExportConfirmation();

@@ -106,7 +106,7 @@ function importBusy(busy) {
 function renderImportPreview(preview) {
   const s = preview.summary;
   $("datasetImportPreview").hidden = false;
-  $("importPreviewSummary").textContent = `新增 ${s.added_images} 张 · 更新粗标注 ${s.updated_coarse} 张 · 跳过重复 ${s.skipped_duplicates} 张。合并后 ${s.image_count} 张 / ${s.object_count} 个框 / ${s.category_count} 类。划分：${Object.entries(s.splits).map(([k,v]) => `${k} ${v}`).join(" · ")}`;
+  $("importPreviewSummary").textContent = `新增 ${s.added_images} 张 · 更新粗标注 ${s.updated_coarse} 张 · 跳过重复 ${s.skipped_duplicates} 张。合并后 ${s.image_count} 张 / ${s.object_count} ${importSession.task==="instance_segmentation"?"个实例":"个框"} / ${s.category_count} 类。划分：${Object.entries(s.splits).map(([k,v]) => `${k} ${v}`).join(" · ")}`;
   for (const source of preview.sources) {
     const row = [...$("importSources").children].find(r => r.querySelector('[data-field="id"]').value.trim() === source.id);
     const area = row.querySelector(".source-mappings");
@@ -125,7 +125,7 @@ function renderImportPreview(preview) {
   $("importConflicts").replaceChildren();
   for (const conflict of preview.conflicts) {
     const label = document.createElement("label");
-    label.textContent = `${conflict.incoming} → 已有 ${conflict.existing}（保留 ${conflict.existing_split}；传入 ${conflict.incoming_split}；框 ${conflict.existing_objects} → ${conflict.incoming_objects}）`;
+    label.textContent = `${conflict.incoming} → 已有 ${conflict.existing}（保留 ${conflict.existing_split}；传入 ${conflict.incoming_split}；${importSession.task==="instance_segmentation"?"实例":"框"} ${conflict.existing_objects} → ${conflict.incoming_objects}）`;
     const select = document.createElement("select");
     select.dataset.conflict = conflict.incoming;
     select.innerHTML = '<option value="keep_existing">保留原数据</option><option value="update_coarse">只更新导入粗标注</option><option value="error">阻止提交</option>';
@@ -136,7 +136,7 @@ function renderImportPreview(preview) {
   }
   $("importSourceReports").textContent = preview.sources.map(source => {
     const r = source.report;
-    return `${source.id}：读取 ${r.image_count} 张 / ${r.object_count} 个框，跳过 ${r.skipped_images} 张 / ${r.skipped_objects} 个框\n` + r.issues.map(i => `[${i.severity}] ${i.location}: ${i.message}`).join("\n");
+    return `${source.id}：读取 ${r.image_count} 张 / ${r.object_count} ${importSession.task==="instance_segmentation"?"个实例":"个框"}，跳过 ${r.skipped_images} 张 / ${r.skipped_objects} ${importSession.task==="instance_segmentation"?"个实例":"个框"}\n` + r.issues.map(i => `[${i.severity}] ${i.location}: ${i.message}`).join("\n");
   }).join("\n\n");
   const issues = preview.sources.reduce((n, s) => n + s.report.issues.length, 0);
   $("datasetImportStatus").textContent = `${issues ? `有 ${issues} 项警告 / 错误，请展开来源检查报告。` : "来源检查完成。"}${preview.commit_allowed ? "核对类别映射和冲突后即可确认。" : "有阻止提交的冲突，请调整策略并重新预览。"}`;

@@ -1064,7 +1064,7 @@ function renderDatasetIO() {
   const summary = current.import_summary;
   const sourceTitle = current.dataset_format === "mixed" ? "多来源数据集" : datasetFormats.find(f => f.id === current.dataset_format)?.title || current.dataset_format;
   $("datasetIOSummary").textContent = summary
-    ? `${sourceTitle} · ${summary.image_count} 张图像 · ${summary.object_count} 个导入框 · ${summary.issue_count} 项提示`
+    ? `${sourceTitle} · ${summary.image_count} 张图像 · ${summary.object_count} ${current.task === "instance_segmentation" ? "个导入实例" : "个导入框"} · ${summary.issue_count} 项提示`
     : "重新分析数据后可使用 Dataset I/O。";
   if (!formats.length) $("datasetIOSummary").textContent += " 当前任务的格式适配器尚未开放。";
   $("showImportReport").disabled = !current.dataset_revision;

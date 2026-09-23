@@ -58,9 +58,24 @@
 `annotations/` 保存最新人工版本，`revisions/<revision>/previous.json` 保存前一个版本，
 `parent_revision_id` 记录关联。已有的 AI 建议优先级与人工空标注语义同样适用。
 
-本阶段交付的是数据模型与工作台。分割格式适配器、分割模型接入和第三方格式转换属于
-后续阶段；当前实例分割的结果可在项目内保存与重载，不提供 COCO/YOLO 分割导出。
-内部块 RLE 使用行优先，不能直接作为 COCO 的列优先 RLE 导出。
+## COCO 实例分割导入与导出
+
+创建项目或追加数据时选择 **COCO Instance Segmentation**，图片根目录对应 JSON 的
+`file_name`；选择含 `images`、`categories`、`annotations` 的实例分割 JSON。
+支持多边形、压缩 RLE 和未压缩 RLE。普通多段多边形保留可编辑顶点；重叠、复杂或越界
+多边形会合并并栅格化为掩码，同时在导入报告中提示。缺失或损坏的分割几何会记录错误，
+不会偷偷退化成检测框。导入的空标注图片也会保留。
+
+保存人工标注后，在“数据集导入 / 导出”选择 **COCO Instance Segmentation**，先检查
+导出兼容性，再提交后台任务并下载 ZIP。`annotations.json` 包含所选的全部划分，
+`annotations/instances_<split>.json` 供按划分使用；可以选择是否附带图片。
+像素掩码转换为 COCO 列优先压缩 RLE，孔洞和同一实例的分离区域按像素保留。
+类别名称、`iscrowd`、原图尺寸和人工确认的空图片也保留；来源 ID 会重新生成，
+置信度与审核修订信息留在 `visionrefine.json`。单张图像超过 COCO RLE 的
+2³²−1 像素限制时，导出预检会阻止该掩码。
+
+内部块 RLE 使用行优先，不能直接作为 COCO 的列优先 RLE 使用；格式适配器负责转换。
+YOLO 实例分割导出和分割模型接入仍属于后续阶段。
 智能贴边在服务端运行，需要安装 `pip install -e '.[segmentation]'` 以提供 NumPy 和 OpenCV。
 
 ## 验收
@@ -72,4 +87,4 @@ VISIONREFINE_BROWSER_TESTS=1 .venv/bin/python -m pytest -q tests/test_segmentati
 
 测试包括多段几何、孔洞、远距离稀疏掩码、越界与非法输入、人工保存/历史/空标注、
 浏览器真实指针与键盘操作、缩放后坐标、跨块画笔、撤销重做、改类和保存刷新恢复，
-以及边界调整、贴边、合并和两种拆分方式。
+以及边界调整、贴边、合并、两种拆分方式和 COCO 分割导入导出回读。

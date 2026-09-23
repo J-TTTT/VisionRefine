@@ -84,11 +84,12 @@ VisionRefine 是一个本地优先的 AI 辅助多模态数据标注工具。它
 | 人工版本保护 | ✅ | AI 建议与人工确认结果分开保存，重新加载优先使用人工版本 |
 | 多模态项目建模 | 🧪 | 检测、实例分割、视觉定位、描述、VQA、OCR 与分类 |
 | 快速检测器与选择性 VLM 复核 | 🚧 | 开发中 |
-| Dataset I/O 通用导入导出框架 | ✅ | 仅图片导入；COCO / YOLO / VOC / CVAT / Label Studio / Labelme 检测格式与原生快照双向转换 |
+| Dataset I/O 通用导入导出框架 | ✅ | 仅图片导入；COCO / YOLO / VOC / CVAT / Label Studio / Labelme 检测格式、COCO 实例分割与原生检测快照双向转换 |
 | 多格式导出中心 | ✅ | 兼容性预检查、转换确认、同快照批量导出、预设、可取消/重试的持久化后台任务 |
 | 多来源合并与安全追加 | ✅ | 导入预览、类别映射、重复图冲突处理、追加新数据与导入历史；保留人工 / AI 版本 |
 | 实例分割人工工作台 | ✅ | 多段多边形、画笔/橡皮擦、边界平滑/收缩/扩张/智能贴边、合并/拆分、撤销重做与人工版本保存 |
-| 分割格式与模型适配器 | 🚧 | 后续扩展 |
+| COCO 实例分割格式 | ✅ | 多边形与 RLE 导入、含孔洞掩码无损导出、划分文件与导出预检 |
+| 分割模型适配器 | 🚧 | 后续扩展 |
 
 ### 基本流程
 
@@ -143,11 +144,12 @@ The workspace loads original-resolution regions on demand. Scroll to zoom and ri
 | Human revision protection | ✅ | AI suggestions stay separate; human-reviewed revisions win on reload |
 | Multimodal project modeling | 🧪 | Detection, instance segmentation, grounding, captioning, VQA, OCR, and classification |
 | Fast detectors and selective VLM review | 🚧 | In development |
-| Dataset I/O framework | ✅ | Image-only import; COCO / YOLO / VOC / CVAT / Label Studio / Labelme detection and native snapshots |
+| Dataset I/O framework | ✅ | Image-only import; COCO / YOLO / VOC / CVAT / Label Studio / Labelme detection, COCO instance segmentation, and native detection snapshots |
 | Multi-format export center | ✅ | Compatibility consent, fixed-snapshot batches, presets, persistent cancel/retry jobs |
 | Multi-source merge and safe append | ✅ | Import preview, category mapping, duplicate conflict policies, append/history with human and AI preservation |
 | Instance segmentation workspace | ✅ | Multipart polygons, sparse brush/eraser masks, edge refinement, merge/split, undo/redo and human revisions |
-| Segmentation format and model adapters | 🚧 | Planned extensions |
+| COCO instance segmentation format | ✅ | Polygon and RLE import, lossless mask export with holes, split files and export preflight |
+| Segmentation model adapter | 🚧 | Planned extension |
 
 ### Workflow
 
