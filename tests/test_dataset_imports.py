@@ -57,7 +57,8 @@ def test_multisource_mapping_preview_and_all_image_routes(client, tmp_path):
     assert commit(client, plan)["id"] == project["id"]
     base = f"/api/projects/{project['id']}"
     analyzed = client.post(base + "/analyze").json()
-    assert {i["path"] for i in analyzed["analysis"]["images"]} == {"a/same.png", "b/same.png"}
+    assert "images" not in analyzed["analysis"]
+    assert {i["path"] for i in client.get(base + "/images").json()["items"]} == {"a/same.png", "b/same.png"}
     for path in ("a/same.png", "b/same.png"):
         assert client.get(base + "/preview/" + path).status_code == 200
         assert client.get(base + "/thumbnail/" + path).status_code == 200

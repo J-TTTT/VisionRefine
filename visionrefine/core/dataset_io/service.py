@@ -12,6 +12,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from PIL import Image
 
+from ..catalog import image_record, write_dataset_index
+
 from . import registry
 from .common import dump_json
 from .models import Annotation, Category, Dataset, ImageRecord, contained_path, safe_relative_path
@@ -44,6 +46,7 @@ def persist_import(store, project: dict, dataset: Dataset, revision: str | None 
     dataset.provenance["revision_id"] = revision
     destination = store.root / project["id"] / "datasets" / f"{revision}.json"
     dump_json(destination, dataset.model_dump())
+    write_dataset_index(destination.with_suffix(".sqlite3"), dataset, project)
     project["dataset_revision"] = revision
     project["dataset_format"] = dataset.provenance["format"]
     project["labels"] = [c.name for c in dataset.categories]
@@ -98,13 +101,13 @@ def effective_annotation(store, project: dict, image: str, dataset: Dataset | No
         if path.is_file():
             suggestion = json.loads(path.read_text(encoding="utf-8"))
             return dict(image=image, objects=suggestion.get("objects", []), status="ai_suggestion", revision_id=latest["revision_id"])
-    if dataset is None:
-        dataset = load_dataset(store, project)
-    if dataset:
-        record = imported_record or next((i for i in dataset.images if i.path == image), None)
-        if record:
-            return dict(image=image, objects=[o.model_dump() for o in record.objects], status=record.status,
-                        revision_id=dataset.provenance.get("revision_id"), split=record.split)
+    record = imported_record
+    if record is None:
+        record = next((i for i in dataset.images if i.path == image), None) if dataset is not None else image_record(store, project, image)
+    if record:
+        return dict(image=image, objects=[o.model_dump() for o in record.objects], status=record.status,
+                    revision_id=dataset.provenance.get("revision_id") if dataset is not None else project.get("dataset_revision"),
+                    split=record.split)
     return dict(image=image, objects=[], status="unreviewed", revision_id=None)
 
 

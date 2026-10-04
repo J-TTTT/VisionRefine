@@ -191,7 +191,10 @@ def test_more_than_200_images_and_images_only_export(client, tmp_path):
     base = f"/api/projects/{project['id']}"
     analysis = client.post(base + "/analyze").json()["analysis"]
     assert not analysis["truncated"]
-    assert len(client.get(base + "/images").json()) == 205
+    first = client.get(base + "/images").json()
+    assert first["total"] == 205
+    assert len(first["items"]) == 50
+    assert client.get(base + "/images", params={"offset": 200}).json()["items"][-1]["path"] == "204.png"
     client.put(base + "/annotations", json={"image": "204.png", "objects": [{"label": "custom", "bbox": [1, 1, 5, 5]}]})
     report = unpack(client, project["id"], {"format": "coco_detection"}, tmp_path / "out")
     assert report["image_count"] == 1

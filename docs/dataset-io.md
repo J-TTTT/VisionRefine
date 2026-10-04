@@ -201,8 +201,14 @@ Remote downloads, training, full project backup and multi-process workers are no
 
 ## API
 
+Project summaries no longer embed `analysis.images`. The UI and API callers use
+bounded image pages; see [project browsing](project-browsing.md) for migration,
+index behavior and synthetic benchmarks.
+
 | Method | Endpoint | Purpose |
 |---|---|---|
+| GET | `/api/projects/{id}/images` | `{items,total,offset,limit,revision}`; default 50, maximum 200; optional path search `q` and `split` |
+| GET | `/api/projects/{id}/dataset/report` | Import report without the full image/annotation manifest |
 | GET | `/api/dataset-formats` | Task/format capabilities from the registry |
 | POST | `/api/dataset-imports/preview` | Preview new/append multi-source import and receive a preview ID |
 | POST | `/api/dataset-imports/{preview_id}/commit` | Revalidate and commit the exact preview, idempotently |

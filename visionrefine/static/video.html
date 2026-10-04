@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>视频标注 · VisionRefine</title>
+  <link rel="stylesheet" href="/assets/video.css?v=2">
+  <script src="/assets/video-segmentation-canvas.js?v=2" defer></script>
+  <script src="/assets/video-segmentation.js?v=2" defer></script>
+  <script src="/assets/video.js?v=2" defer></script>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <a class="brand" href="/" data-leave><span class="brand-mark">VR</span>VisionRefine</a>
+    <div class="workspace-switch"><a href="/" data-leave>图片工作台 ↗</a><span>视频工作台</span></div>
+    <button id="newProject" class="primary full">＋ 新建视频项目</button>
+    <label class="nav-label" for="projectSelect">当前项目</label>
+    <select id="projectSelect" aria-label="切换视频项目"><option value="">选择项目</option></select>
+    <div class="side-heading"><span>视频素材</span><span id="videoCount">0</span></div>
+    <input type="search" id="videoSearch" placeholder="搜索视频名称" aria-label="搜索视频名称">
+    <nav id="videoList" class="video-list" aria-label="视频列表"><p class="side-empty">新建项目，导入第一段视频。</p></nav>
+    <div class="sidebar-foot"><span class="status-dot"></span><span id="connectionStatus">正在连接本地服务…</span></div>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><div class="eyebrow">VIDEO ANNOTATION / 视频标注</div><h1 id="projectTitle">从一段视频开始</h1><p id="projectSubtitle">事件、描述与抽帧，在同一个工作台完成。</p></div>
+      <div class="toolbar"><button class="secondary project-action" id="appendVideos" disabled>追加视频</button><button class="secondary project-action" id="manageLabels" disabled>事件标签</button><button class="secondary project-action" id="transfer" disabled>导入 / 导出</button><button class="primary" id="save" disabled>保存草稿</button></div>
+    </header>
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+    <section id="welcome" class="welcome">
+      <div class="welcome-icon" aria-hidden="true">▷</div><span class="eyebrow">把画面变成可用的数据</span><h2>看见内容，标记时间。</h2><p>导入本地视频，标注发生的事件，写下整段或片段描述，<br>再把需要的画面送到图片工作台。</p>
+      <button class="primary" id="welcomeCreate">创建视频项目 →</button>
+      <div class="feature-grid"><div><b>01</b><h3>动作 / 事件</h3><p>固定标签或自由描述<br>支持时间点、区间与重叠</p></div><div><b>02</b><h3>视频描述</h3><p>整段概述或片段描述<br>分别保存草稿与审核状态</p></div><div><b>03</b><h3>选帧与标注</h3><p>按时间、数量或事件采样<br>保留视频与帧的来源关系</p></div></div>
+    </section>
+    <section id="workspace" class="workspace" hidden>
+      <div class="work-main">
+        <div class="asset-heading"><div><h2 id="videoTitle"></h2><span id="videoMeta" class="muted"></span></div><span id="saveState" class="save-state">已保存</span></div>
+        <div class="player-stage" id="playerStage">
+          <video id="player" controls preload="metadata" playsinline aria-label="视频播放器"></video>
+          <img id="exactFrame" alt="当前精确帧" hidden>
+          <canvas id="segmentationCanvas" aria-label="当前帧实例分割画布" tabindex="0" hidden></canvas>
+          <span id="exactBadge" class="exact-badge" hidden>精确帧预览</span>
+        </div>
+        <div id="segCanvasTools" class="seg-canvas-tools" hidden>
+          <div class="seg-tool-row"><button id="segPolygon" class="secondary" data-seg-tool="polygon">多边形</button><button id="segEdit" class="secondary" data-seg-tool="edit">顶点编辑</button><button id="segBrush" class="secondary" data-seg-tool="brush">画笔</button><button id="segErase" class="secondary" data-seg-tool="erase">橡皮擦</button><button id="segPan" class="secondary" data-seg-tool="pan">平移</button><label>画笔半径<input id="segRadius" type="number" min="1" max="256" value="12"> px</label><button id="segFit" class="text-button">适应画布</button><span id="segZoom" class="muted"></span></div>
+          <div class="seg-tool-row"><button id="segFinish" class="secondary">完成轮廓 ↵</button><button id="segCancelDraft" class="secondary">取消轮廓</button><button id="segAppendContour" class="secondary">追加轮廓</button><button id="segDeleteVertex" class="secondary">删除顶点</button><button id="segDeleteContour" class="secondary">删除轮廓</button><button id="segUndo" class="secondary">撤销</button><button id="segRedo" class="secondary">重做</button></div>
+          <div id="segCanvasStatus" class="hint" role="status">先创建对象，再在精确帧上描出可见轮廓。</div>
+        </div>
+        <div class="transport">
+          <button id="previousFrame" class="secondary" title="上一帧（←）" aria-label="上一帧">⏮</button><button id="play" class="primary" title="播放 / 暂停（空格）">播放</button><button id="nextFrame" class="secondary" title="下一帧（→）" aria-label="下一帧">⏭</button>
+          <span class="time-readout" id="timeReadout">00:00.000 / 00:00.000</span><span class="frame-readout" id="frameReadout">帧 —</span>
+          <label class="inline-label">倍速<select id="speed" aria-label="播放速度"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
+          <label class="check"><input type="checkbox" id="loop">循环所选片段</label>
+        </div>
+        <section class="timeline-panel" aria-label="标注时间轴">
+          <div class="timeline-heading"><span>时间轴</span><span class="muted">点击定位 · 拖动所选标注两端调整范围</span></div>
+          <input id="seek" class="seek" type="range" min="0" max="1" step="0.001" value="0" aria-label="视频时间定位">
+          <div id="ruler" class="ruler"></div><div id="timeline" class="timeline"></div>
+        </section>
+        <section class="records-panel">
+          <div class="tabs" role="tablist" aria-label="标注类型"><button id="tabEvents" class="tab active" role="tab" aria-selected="true" aria-controls="recordsBody" data-tab="events">动作 / 事件 <span id="eventCount">0</span></button><button id="tabCaptions" class="tab" role="tab" aria-selected="false" aria-controls="recordsBody" data-tab="captions">视频描述 <span id="captionCount">0</span></button><button id="tabSegmentation" class="tab" role="tab" aria-selected="false" aria-controls="segmentationPanel" data-tab="segmentation">实例分割 <span id="segTrackCount">0</span></button><button id="tabFrames" class="tab" role="tab" aria-selected="false" aria-controls="recordsBody" data-tab="frames">抽帧标注</button></div>
+          <div class="records-tools" id="recordTools"><div><button id="addRecord" class="secondary">＋ 添加事件</button><span id="taskReview" class="review-chip"></span></div><button class="text-button" id="reviewTask">确认事件审核完成</button></div>
+          <div id="recordsBody" role="tabpanel" class="records-body"></div>
+          <div id="segmentationPanel" class="segmentation-panel" hidden>
+            <div class="seg-panel-head"><div><button id="segAddTrack" class="primary">＋ 新建对象</button><button id="segManageLabels" class="secondary">对象类别</button></div><span id="segOverallProgress" class="muted"></span></div>
+            <p class="hint">只标注可见像素。完全遮挡或离开画面时记录状态；再次出现时继续使用同一对象 ID。未标注帧保持空缺。</p>
+            <div id="segTrackList" class="seg-track-list"></div>
+            <div class="seg-review-section"><h3>视频区间审核</h3><div class="seg-range-row"><label>起始帧<input id="segReviewStart" type="number" min="1" step="1" value="1"></label><label>结束帧<input id="segReviewEnd" type="number" min="1" step="1" value="1"></label><button id="segReviewRange" class="secondary">审核此区间</button></div><p class="hint">只有区间内所有活动对象逐帧有已审核分割，或明确标记为已审核遮挡／离开，才能确认。没有活动对象的区间可确认无对象。</p><div id="segReviewedRanges"></div></div>
+          </div>
+          <div id="framesPanel" class="frames-panel" hidden>
+            <form id="sampleForm"><div class="sample-options"><label>采样方式<select id="sampleMode"><option value="current">当前精确帧</option><option value="interval">按时间间隔</option><option value="count">按目标数量</option><option value="events">事件边界帧</option></select></label><label class="sample-range" hidden>开始（秒）<input id="sampleStart" type="number" min="0" step="any" value="0"></label><label class="sample-range" hidden>结束（秒）<input id="sampleEnd" type="number" min="0" step="any" value="0"></label><label id="intervalField" hidden>间隔（秒）<input id="sampleInterval" type="number" min="0.000001" step="any" value="1"></label><label id="countField" hidden>目标数量<input id="sampleCount" type="number" min="1" max="500" value="8"></label><button class="secondary" type="submit">预览候选帧</button></div></form>
+            <p class="hint">预览后选择需要的帧。事件边界采样使用已保存的事件，请先保存修改。</p>
+            <div id="sampleSummary" class="sample-summary"></div><div id="sampleFrames" class="sample-frames"></div>
+            <form id="extractForm" hidden><div class="extract-options"><label>图片标注任务<select id="extractTask"><option value="detection">目标检测</option><option value="instance_segmentation">实例分割</option></select></label><label>图片对象类别<input id="extractLabels" required placeholder="例如：人, 杯子（至少一个）"></label><button class="primary" type="submit">创建图片标注项目</button></div><label id="includeSegmentationField" class="check" hidden><input id="includeSegmentation" type="checkbox">带出这些帧已有的视频分割（作为待审核标注）</label><p class="hint">抽帧会保留视频来源和原始帧时间。图片对象类别与事件标签分别管理。</p></form>
+          </div>
+        </section>
+      </div>
+      <aside class="inspector"><div class="inspector-heading"><span class="eyebrow">ANNOTATION</span><h2 id="inspectorTitle">标注详情</h2></div><div id="inspectorBody"><div class="inspector-empty">选择一条标注，<br>或在当前时间添加新标注。</div></div><div class="keyboard-help"><span>快捷键</span><kbd>空格</kbd> 播放 / 暂停 <br><kbd>←</kbd><kbd>→</kbd> 逐帧定位 <br><kbd>Ctrl / ⌘</kbd> + <kbd>S</kbd> 保存草稿</div></aside>
+    </section>
+    <section class="jobs-panel" id="jobsPanel" hidden><details open><summary>后台任务 <span id="jobCount"></span><button id="refreshJobs" class="text-button" type="button">刷新</button></summary><div id="jobs"></div></details></section>
+    <footer class="page-foot">VisionRefine · 视频工作台 <span>本机数据 · 人工标注 · 可追溯导出</span></footer>
+  </main>
+</div>
+<dialog id="projectDialog"><form id="projectForm"><div class="dialog-heading"><div><span class="eyebrow">NEW PROJECT</span><h2>新建视频项目</h2></div><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><label>项目名称<input name="name" required maxlength="160" placeholder="例如：动作与事件数据集"></label><label>视频文件或目录路径<textarea name="paths" required rows="4" placeholder="/path/to/videos&#10;/path/to/another-video.mp4"></textarea><small>填写运行 VisionRefine 的机器上的路径，每行一个；目录会递归扫描。</small></label><label>初始事件标签（可选）<textarea name="labels" rows="2" placeholder="行走, 拿起物品, 开门"></textarea><small>逗号或换行分隔，也可以创建后导入标签文件。</small></label><label>默认数据划分<select name="split"><option value="unspecified">未指定</option><option value="train">训练集 train</option><option value="val">验证集 val</option><option value="test">测试集 test</option></select></label><div id="projectError" class="form-error" role="alert"></div><div class="dialog-actions"><button class="secondary" type="button" data-close>取消</button><button class="primary" type="submit">创建并导入视频</button></div></form></dialog>
+<dialog id="appendDialog"><form id="appendForm"><div class="dialog-heading"><div><span class="eyebrow">IMPORT VIDEOS</span><h2>追加视频到当前项目</h2></div><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><label>视频文件或目录路径<textarea name="paths" required rows="5" placeholder="/path/to/videos&#10;/path/to/another-video.mp4"></textarea><small>每行一个本地路径。相同视频会按来源校验，任务进度显示在后台任务中。</small></label><div id="appendError" class="form-error" role="alert"></div><div class="dialog-actions"><button class="secondary" type="button" data-close>取消</button><button class="primary" type="submit">导入视频</button></div></form></dialog>
+<dialog id="labelsDialog"><form id="labelsForm"><div class="dialog-heading"><div><span class="eyebrow">EVENT LABELS</span><h2 id="labelsDialogTitle">管理事件标签</h2></div><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><p class="hint">标签 ID 保持稳定，改名会同步显示在已有事件中。已被引用的标签不能直接删除。</p><div id="labelRows" class="label-rows"></div><div class="label-add"><input id="newLabelName" placeholder="新增事件标签" aria-label="新增事件标签"><button id="addLabel" class="secondary" type="button">＋ 添加</button></div><label>从文件导入<input id="labelsFile" type="file" accept=".txt,.json"><small>TXT 每行一个标签；JSON 为名称数组，或包含 name、color 的对象数组。</small></label><div id="labelPreview" class="import-preview" hidden></div><div id="labelsError" class="form-error" role="alert"></div><div class="dialog-actions"><button class="secondary" type="button" data-close>取消</button><button class="primary" type="submit">保存标签</button></div></form></dialog>
+<dialog id="transferDialog"><div class="dialog-heading"><div><span class="eyebrow">DATA EXCHANGE</span><h2>导入 / 导出标注</h2></div><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><section><h3>导出原生 JSON</h3><p class="hint">保留事件与对象类别、视频与帧映射、事件、描述、对象分割和审核状态。使用已保存的数据，不包含视频文件。</p><label>导出范围<select id="exportPolicy"><option value="all">所有已保存标注（含草稿）</option><option value="reviewed">仅已审核标注</option></select></label><button id="export" class="primary">下载标注 JSON</button></section><section class="import-section"><h3>导入原生 JSON</h3><p class="hint">导入前核对素材匹配与标签。导入会更新匹配视频的标注，请先导出备份。</p><label>选择标注文件<input id="annotationsFile" type="file" accept=".json"></label><div id="annotationPreview" class="import-preview" hidden></div><button id="importAnnotations" class="secondary" disabled>确认导入到当前项目</button></section><div id="transferError" class="form-error" role="alert"></div></dialog>
+<dialog id="segNewTrackDialog"><form id="segNewTrackForm"><div class="dialog-heading"><div><span class="eyebrow">VIDEO INSTANCE</span><h2>新建分割对象</h2></div><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><label>对象名称<input id="segNewName" required maxlength="160" placeholder="例如：人物 01"></label><label>对象类别<select id="segNewLabel" required></select></label><div class="seg-range-row"><label>起始帧<input id="segNewStart" type="number" min="1" step="1" required></label><label>结束帧<input id="segNewEnd" type="number" min="1" step="1" required></label></div><p class="hint">范围包含两端。对象 ID 跨帧保持稳定；范围内尚未标注的帧不会自动生成轮廓。</p><div id="segNewError" class="form-error" role="alert"></div><div class="dialog-actions"><button class="secondary" data-close type="button">取消</button><button class="primary" type="submit">创建对象并标注当前帧</button></div></form></dialog>
+<dialog id="unsavedDialog" class="small-dialog"><h2>还有未保存的标注</h2><p>离开当前视频前，请选择如何处理修改。</p><div class="dialog-actions"><button class="secondary" data-decision="cancel">继续编辑</button><button class="secondary danger" data-decision="discard">放弃修改</button><button class="primary" data-decision="save">保存并继续</button></div></dialog>
+</body>
+</html>

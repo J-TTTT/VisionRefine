@@ -78,6 +78,7 @@ VisionRefine 是一个本地优先的 AI 辅助多模态数据标注工具。它
 | 能力 | 状态 | 说明 |
 |---|:---:|---|
 | 数据集分析与分辨率路由 | ✅ | 图像统计、尺寸检查、粗标注识别与输入策略推荐 |
+| 大项目分页浏览 | ✅ | 项目摘要、每页 50 张、路径搜索与跳页；单图标注和位置按索引读取 |
 | 超高分辨率检测框编辑 | ✅ | 缩放、平移、连续/重叠绘制、选择、移动、八方向缩放与删除 |
 | 画布内标签精修 | ✅ | 分类着色的框与标签，点击标签即可改类 |
 | OpenAI-compatible / vLLM | ✅ | 模型发现、单切片测试与整图切片测试 |
@@ -89,6 +90,9 @@ VisionRefine 是一个本地优先的 AI 辅助多模态数据标注工具。它
 | 多来源合并与安全追加 | ✅ | 导入预览、类别映射、重复图冲突处理、追加新数据与导入历史；保留人工 / AI 版本 |
 | 实例分割人工工作台 | ✅ | 多段多边形、画笔/橡皮擦、边界平滑/收缩/扩张/智能贴边、合并/拆分、撤销重做与人工版本保存 |
 | COCO 实例分割格式 | ✅ | 多边形与 RLE 导入、含孔洞掩码无损导出、划分文件与导出预检 |
+| 视频人工标注第一版 | ✅ | 事件时间点／区间、视频与片段描述、标签管理、分别审核及原生 JSON 导入导出 |
+| 视频抽帧与图片标注衔接 | ✅ | 真实时间戳定位、采样预览、后台抽帧、来源追溯，接入检测／实例分割图片工作台 |
+| 视频人工实例分割 | ✅ | 稳定对象 ID、逐帧轮廓与掩码、遮挡区间、轨迹拆分合并、事件关联及审核 |
 | 分割模型适配器 | 🚧 | 后续扩展 |
 
 ### 基本流程
@@ -106,6 +110,16 @@ VisionRefine 是一个本地优先的 AI 辅助多模态数据标注工具。它
 新增格式的适用范围、原生包信任规则与开发模板见 [第一阶段格式中心](docs/format-center.md)。原生包默认重新导入为粗标注，只有明确勾选信任时才恢复审核状态；它不是完整项目备份。
 
 实例分割的创建步骤、快捷键和数据边界见 [实例分割工作台](docs/instance-segmentation.md)。
+
+大项目分页、旧项目迁移、API 变更与合成性能基准见 [大项目浏览](docs/project-browsing.md)。
+
+### 视频标注
+
+安装 `pip install -e '.[video,segmentation]'` 后，从首页进入“视频标注工作台”，或访问 `/video`。新建项目并填写本机视频文件或目录路径，即可标注重叠事件、瞬时事件和整段／片段描述，也可预览抽帧并进入已有图片工作台。视频事件标签支持 TXT / JSON 导入和直接新增；事件可以只写自由描述。
+
+第二版增加“实例分割”工作区：用同一对象 ID 保存不同帧的轮廓，支持多段多边形、画笔、橡皮擦及遮挡状态。只标实际可见部分，完全遮挡后重新出现仍沿用原对象。关键帧之间的空缺保持未标注，逐帧审核后才能确认完成。
+
+视频索引、预览与抽帧在本机完成，使用 PyAV，不需要额外安装系统 FFmpeg。AI 视频理解和轮廓传播将在后续版本加入。设计、数据边界和测试步骤见 [视频第一版设计与验收](docs/video-v1.md) 和 [第二版人工实例分割](docs/video-v2.md)。
 
 ## English
 
@@ -138,6 +152,7 @@ The workspace loads original-resolution regions on demand. Scroll to zoom and ri
 | Capability | Status | Details |
 |---|:---:|---|
 | Dataset inspection and routing | ✅ | Image statistics, dimensions, coarse annotations, and recommended input strategy |
+| Large-project browsing | ✅ | Compact summaries, 50-image pages, path search, page jumps and indexed single-image reads |
 | Ultra-high-resolution box editing | ✅ | Zoom, pan, continuous/overlapping creation, selection, movement, eight-handle resize, and deletion |
 | On-canvas label refinement | ✅ | Class-colored boxes and labels with click-to-relabel interaction |
 | OpenAI-compatible / vLLM adapters | ✅ | Model discovery, single-tile pilots, and tiled whole-image tests |
@@ -149,6 +164,9 @@ The workspace loads original-resolution regions on demand. Scroll to zoom and ri
 | Multi-source merge and safe append | ✅ | Import preview, category mapping, duplicate conflict policies, append/history with human and AI preservation |
 | Instance segmentation workspace | ✅ | Multipart polygons, sparse brush/eraser masks, edge refinement, merge/split, undo/redo and human revisions |
 | COCO instance segmentation format | ✅ | Polygon and RLE import, lossless mask export with holes, split files and export preflight |
+| Manual video annotation | ✅ | Temporal events, whole/segment captions, stable event labels, separate review and native JSON exchange |
+| Video frame datasets | ✅ | Presentation-timestamp indexing, sampling preview, background extraction and provenance-linked image workspaces |
+| Manual video instance segmentation | ✅ | Stable object IDs, per-frame polygons and masks, occlusion ranges, track operations, event references and explicit coverage review |
 | Segmentation model adapter | 🚧 | Planned extension |
 
 ### Workflow
@@ -183,6 +201,7 @@ Open **<http://127.0.0.1:8020>** and create your first project.
 ## Roadmap
 
 - [x] Dataset inspection and automatic resolution routing
+- [x] Paginated project/workspace browsing and persistent image indexes
 - [x] Tiled pilot inference through OpenAI-compatible APIs and vLLM
 - [x] Original-resolution detection workspace
 - [x] Separate AI and human revisions
