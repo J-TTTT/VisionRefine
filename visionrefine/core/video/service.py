@@ -266,6 +266,16 @@ class VideoService:
 
     def save_segmentation(self, pid, vid, payload):
         with self.store.locked(pid):
+            previous = self.segmentation(pid, vid)
+            old_keys = {(t["id"], k["frame_index"]): k for t in previous["tracks"] for k in t["keyframes"]}
+            payload = copy.deepcopy(payload)
+            for track in payload.get("tracks", []):
+                for key in track.get("keyframes", []):
+                    old = old_keys.get((track["id"], key["frame_index"]))
+                    if old and key.get("provenance") and key.get("provenance") == old.get("provenance") and any(key.get(field) != old.get(field) for field in ("geometry", "visibility")):
+                        # A user correction becomes a protected human anchor on the next run.
+                        key.pop("provenance", None)
+                        key["reviewed"] = False
             document = seg.validate_document(payload, self.video(pid, vid), self.object_labels(pid))
             if document.revision != self.segmentation(pid, vid)["revision"]:
                 raise VideoConflict("Segmentation changed since you opened it. Reload before saving.")
@@ -684,6 +694,12 @@ class VideoService:
                       "created_at": now(), "policy": policy,
                       "project": {"name": project["name"], "split": project.get("split", "unspecified")},
                       "labels": self.labels(pid), "videos": videos, "media_included": False}
+            has_ai = any(item.get("provenance") for v in videos for item in
+                         [*v["annotations"]["events"], *v["annotations"]["captions"],
+                          *(k for t in v["segmentation"]["tracks"] for k in t["keyframes"])])
+            if has_ai:
+                result["schema_version"] = "3.0"
+                has_segmentation = True
             if has_segmentation:
                 result["object_labels"] = self.object_labels(pid)
             else:
@@ -719,7 +735,7 @@ class VideoService:
             if mapping is not None and not isinstance(mapping, dict):
                 raise ValueError("Expected revisions must map video IDs to revision numbers")
         schema = bundle.get("schema_version")
-        if bundle.get("schema") != "visionrefine-video" or schema not in {"1.0", "2.0"}:
+        if bundle.get("schema") != "visionrefine-video" or schema not in {"1.0", "2.0", "3.0"}:
             raise ValueError("Unsupported video annotation format")
         incoming_labels = LabelsInput.model_validate({"labels": bundle.get("labels", [])}).model_dump()["labels"]
         incoming_objects = LabelsInput.model_validate({"labels": bundle.get("object_labels", [])}).model_dump()["labels"]
@@ -748,7 +764,7 @@ class VideoService:
                     raise ValueError("Imported presentation timestamps do not match")
                 seg_document = None
                 tracks = self.segmentation(pid, vid)["tracks"]
-                if schema == "2.0":
+                if schema in {"2.0", "3.0"}:
                     if not isinstance(item.get("segmentation"), dict):
                         raise ValueError("Version 2 videos require a segmentation document")
                     seg_payload = SegmentationDocument.model_validate(item["segmentation"]).model_dump()
@@ -786,7 +802,7 @@ class VideoService:
             # No project or annotation file changes until every incoming video has validated.
             project = self.project(pid)
             project.update(video_labels=labels, labels=[label["name"] for label in labels])
-            if schema == "2.0":
+            if schema in {"2.0", "3.0"}:
                 project["video_object_labels"] = objects
             self.store.save(project)
             for vid, payload, seg_document in staged:

@@ -310,6 +310,7 @@
     bind();
     return {
       getTracks: () => document.tracks,
+      getSelectedTrackId: () => trackId,
       getLabels: () => labels,
       setLabels(value) { labels = value || []; renderList(); renderDetails(); if (active) syncFrame(true); },
       getDocument: () => document,

@@ -13,6 +13,29 @@ class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False, str_strip_whitespace=True)
 
 
+class AIOrigin(Contract):
+    job_id: str = Field(max_length=96)
+    provider_id: str = Field(max_length=96)
+    model: str = Field(max_length=300)
+    generated_at: str = Field(max_length=64)
+    input_revision: str = Field(max_length=128)
+    method: str = Field(max_length=64)
+    model_revision: str | None = Field(default=None, max_length=128)
+    source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    frame_range: list[int] | None = Field(default=None, min_length=2, max_length=2)
+
+
+class WithOrigin(Contract):
+    provenance: AIOrigin | None = None
+
+    @model_serializer(mode="wrap")
+    def optional_origin(self, handler):
+        result = handler(self)
+        if self.provenance is None:
+            result.pop("provenance", None)
+        return result
+
+
 class Label(Contract):
     id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,96}$")
     name: str = Field(min_length=1, max_length=200)
@@ -42,7 +65,7 @@ class ImportInput(Contract):
     paths: list[str] = Field(min_length=1, max_length=1000)
 
 
-class Event(Contract):
+class Event(WithOrigin):
     track_ids: list[str] = Field(default_factory=list, max_length=1000)
 
     @model_serializer(mode="wrap")
@@ -50,6 +73,8 @@ class Event(Contract):
         result = handler(self)
         if not self.track_ids:
             result.pop("track_ids", None)
+        if self.provenance is None:
+            result.pop("provenance", None)
         return result
 
     id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,96}$")
@@ -73,7 +98,7 @@ class Event(Contract):
         return self
 
 
-class Caption(Contract):
+class Caption(WithOrigin):
     id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,96}$")
     start: float | None = Field(default=None, ge=0)
     end: float | None = Field(default=None, ge=0)
@@ -167,7 +192,7 @@ class VisibilityRange(FrameRange):
     reviewed: bool = False
 
 
-class Keyframe(Contract):
+class Keyframe(WithOrigin):
     frame_index: int = Field(ge=0, strict=True)
     visibility: Literal["visible", "occluded", "outside"] = "visible"
     geometry: Geometry | None = None

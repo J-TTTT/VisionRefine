@@ -10,6 +10,7 @@ workspace/cache/*
 !workspace/cache/.gitkeep
 workspace/trash/
 workspace/import-previews/
+workspace/ai/
 .env
 .env.*
 *.pem

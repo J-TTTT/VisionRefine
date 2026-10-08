@@ -157,7 +157,8 @@
               <button class="secondary active" id="drawBoxTool" type="button" aria-pressed="true" title="新增框（N）">＋ 新增框</button>
               <button class="secondary" id="editBoxTool" type="button" aria-pressed="false" title="编辑框（V）">编辑框</button>
             </div>
-            <button class="secondary" id="runInitialDetection">AI 初标当前图像</button>
+            <button class="secondary" id="imageAI">AI 辅助标注</button>
+            <button class="secondary" id="runInitialDetection">切片检测（旧适配器）</button>
             <button class="secondary" id="deleteBox" disabled>删除选中框</button>
             <button class="primary" id="saveAnnotations">保存人工检查</button>
             <span id="workspaceStatus" aria-live="polite"></span>
@@ -252,6 +253,9 @@
   <script src="/assets/segmentation.js?v=segmentation-2"></script>
   <script src="/assets/image-browser.js?v=paging-1"></script>
   <script src="/assets/app.js?v=paging-1"></script>
+  <link rel="stylesheet" href="/assets/ai.css?v=3">
+  <script src="/assets/ai.js?v=3"></script>
+  <script src="/assets/ai-image.js?v=3"></script>
   <script src="/assets/dataset-import.js?v=import-path-1"></script>
   <script src="/assets/dataset-export.js?v=coco-segmentation-1"></script>
 </body>

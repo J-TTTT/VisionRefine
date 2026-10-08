@@ -87,8 +87,16 @@ def document_path(store, project_id: str, image: str, kind: str) -> Path:
 
 
 def effective_annotation(store, project: dict, image: str, dataset: Dataset | None = None,
-                         imported_record: ImageRecord | None = None) -> dict:
+                         imported_record: ImageRecord | None = None, *, include_draft=True) -> dict:
     image = safe_relative_path(image)
+    if include_draft:
+        path = document_path(store, project["id"], image, "ai_drafts")
+        if path.is_file():
+            draft = json.loads(path.read_text(encoding="utf-8"))
+            base = effective_annotation(store, project, image, dataset, imported_record, include_draft=False)
+            checksum = hashlib.sha256(json.dumps(base, sort_keys=True, allow_nan=False).encode()).hexdigest()
+            if draft.get("base_revision") == checksum:
+                return draft
     # An explicitly reviewed empty image must take precedence over every proposal.
     for folder, status in (("annotations", "human_reviewed"), ("suggestions", "ai_suggestion")):
         path = document_path(store, project["id"], image, folder)
@@ -135,7 +143,7 @@ def select_snapshot(store, project: dict, policy: str, splits: list[str]):
     for record in dataset.images:
         if splits and record.split not in splits:
             continue
-        annotation = effective_annotation(store, project, record.path, dataset, record)
+        annotation = effective_annotation(store, project, record.path, dataset, record, include_draft=policy != "reviewed")
         if annotation["status"] not in accepted[policy]:
             skipped.append(dict(image=record.path, status=annotation["status"]))
             continue
@@ -147,7 +155,7 @@ def select_snapshot(store, project: dict, policy: str, splits: list[str]):
             if category is None:
                 raise ValueError(f"Unknown label in {record.path}: {obj.get('label')}")
             image.objects.append(Annotation.model_validate({**obj, "id": str(obj.get("id") or f"object-{index}"),
-                "category_id": category.id, "source": annotation["status"]}))
+                "category_id": category.id, "source": obj.get("source", annotation["status"]) if annotation.get("base_revision") else annotation["status"]}))
         image.provenance["revision_id"] = annotation.get("revision_id")
         selected.images.append(image)
         selected_revisions.append(dict(image=record.path, status=image.status, revision_id=annotation.get("revision_id")))

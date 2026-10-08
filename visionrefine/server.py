@@ -237,6 +237,9 @@ def get_project(project_id: str) -> dict:
 def delete_project(project_id: str) -> dict:
     try:
         project = store.get(project_id)
+        from visionrefine.core.ai.service import AIService, TERMINAL
+        if any(job["status"] not in TERMINAL for job in AIService(store).jobs(project_id)):
+            raise HTTPException(409, "请先等待或取消这个项目的 AI 任务")
         if project.get("task") == "video" or project.get("video_parent_project"):
             from visionrefine.core.video.service import VideoConflict, ensure_no_active_jobs
             try:
@@ -950,6 +953,14 @@ app.mount("/assets", StaticFiles(directory=STATIC_ROOT), name="assets")
 from visionrefine.core.video.api import create_video_router
 
 app.include_router(create_video_router(lambda: store))
+from visionrefine.core.ai.api import create_ai_router
+
+app.include_router(create_ai_router(lambda: store))
+
+
+@app.get("/ai")
+def ai_settings():
+    return FileResponse(STATIC_ROOT / "ai.html")
 
 
 @app.get("/video")

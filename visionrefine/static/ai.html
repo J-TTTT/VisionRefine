@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI 模型设置 · VisionRefine</title><link rel="stylesheet" href="/assets/ai.css?v=3"><script src="/assets/ai-settings.js?v=3" defer></script></head>
+<body class="ai-settings"><main>
+<div class="ai-head"><div><h1>AI 模型设置</h1><p>图片与视频共用模型服务，每个项目可单独选择。</p></div><nav><a href="/">图片工作台</a> · <a href="/video">视频工作台</a></nav></div>
+<p class="ai-note">默认使用本机的 OWLv2、SAM 2.1 Tiny 和 Qwen3-VL 2B。自定义服务需要先由使用者部署。密钥填写服务器环境变量名称。视频理解目前仅分析画面，未处理音频。</p>
+<div id="aiConfigStatus" class="ai-status" role="status">正在读取配置…</div>
+<form id="aiConfigForm"><section><h2>默认能力分配</h2><div id="aiDefaults" class="ai-profile"></div></section><div id="aiProviders"></div><div class="ai-actions"><button type="button" id="aiAddProvider">＋ 添加自定义服务</button><button class="ai-primary" type="submit">保存模型配置</button></div></form>
+</main></body></html>

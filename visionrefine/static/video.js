@@ -473,6 +473,24 @@
   async function init() {
     segmentation = window.VideoSegmentationWorkspace.create({state, uid, api, post, videoPath, projectPath, notify, run, setFrame, updateDirty, saveAll, openLabels, replaceAnnotations(value) { if (!value) return; state.annotations = normalizeAnnotations(value); state.dirty = false; renderRecords(); renderInspector(); }});
     bind(); sampleOptions();
+    $('videoAI').onclick = () => run(async () => {
+      if (!state.video) { notify('请先选择一段视频。'); return; }
+      if (!await saveAll()) return;
+      $('player').pause();
+      const pid = state.project.id, vid = state.video.id;
+      await window.VisionRefineAI.open({pid, videoId: vid, width: state.video.width, height: state.video.height,
+        frame: state.frame, frameCount: state.timestamps.length, tracks: clone(segmentation.getTracks()), trackId: segmentation.getSelectedTrackId(),
+        initialCapability: state.tab === 'segmentation' ? 'video_segmentation' : state.tab === 'events' ? 'video_events' : 'video_caption',
+        imageUrl: `${videoPath()}/frames/${state.frame}`, beforeApply: () => sameVideo(pid, vid) && !hasUnsaved() && !isSaving(),
+        onApplied: async () => {
+          if (!sameVideo(pid, vid)) return;
+          if (hasUnsaved()) { notify('AI 建议已保存为草稿；页面有新的未保存修改，已保留这些修改。请整理后重新加载。', true); return; }
+          const [annotations, shapes] = await Promise.all([api(`${videoPath()}/annotations`), api(`${videoPath()}/segmentation`)]);
+          if (!sameVideo(pid, vid) || hasUnsaved()) return;
+          state.annotations = normalizeAnnotations(annotations); state.dirty = false; segmentation.setDocument(shapes);
+          renderRecords(); renderInspector(); renderTimeline(); segmentation.onFrame(); updateDirty();
+        }});
+    });
     const params = new URLSearchParams(location.search);
     const results = await Promise.allSettled([api(`${API}/capabilities`), loadProjects()]);
     if (results[1].status === 'rejected') throw results[1].reason;
