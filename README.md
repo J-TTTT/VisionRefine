@@ -102,6 +102,7 @@ VisionRefine 是一个本地优先的 AI 辅助多模态数据标注工具。它
 | 视频抽帧与图片标注衔接 | ✅ | 真实时间戳定位、采样预览、后台抽帧、来源追溯，接入检测／实例分割图片工作台 |
 | 视频人工实例分割 | ✅ | 稳定对象 ID、逐帧轮廓与掩码、遮挡区间、轨迹拆分合并、事件关联及审核 |
 | 分割模型适配器 | 🚧 | 后续扩展 |
+| 分割格式与模型适配器 | 🚧 | 后续扩展 |
 
 ### 基本流程
 
@@ -176,6 +177,7 @@ The workspace loads original-resolution regions on demand. Scroll to zoom and ri
 | Video frame datasets | ✅ | Presentation-timestamp indexing, sampling preview, background extraction and provenance-linked image workspaces |
 | Manual video instance segmentation | ✅ | Stable object IDs, per-frame polygons and masks, occlusion ranges, track operations, event references and explicit coverage review |
 | Segmentation model adapter | 🚧 | Planned extension |
+| Segmentation format and model adapters | 🚧 | Planned extensions |
 
 ### Workflow
 
