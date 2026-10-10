@@ -7,7 +7,7 @@ from visionrefine.core.dataset_io import registry
 from visionrefine.core.dataset_io.service import package_snapshot, prepare_import
 from visionrefine.core.dataset_io.testing import detection_fixture, assert_detection_equivalent
 
-FORMATS = [f["id"] for f in registry.capabilities() if f["can_export"]]
+FORMATS = [f["id"] for f in registry.capabilities() if f["can_export"] and "detection" in f["tasks"]]
 
 
 def write_and_read(store, dataset, root, format_id):

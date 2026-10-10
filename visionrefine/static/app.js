@@ -1,6 +1,9 @@
 const $ = (id) => document.getElementById(id);
 let projects = [];
 let current = null;
+let projectNavigation = 0;
+let editorLoadSequence = 0;
+let editorLoadController = null;
 let createLabels = ["person"];
 let currentLabels = [];
 let datasetFormats = [];
@@ -22,6 +25,7 @@ const editor = {
 };
 
 const taskNames = {
+  video: "视频标注",
   detection: "目标检测", instance_segmentation: "实例分割", grounding: "视觉定位",
   captioning: "图像描述", vqa: "视觉问答", ocr: "OCR", classification: "图像分类"
 };
@@ -144,11 +148,14 @@ async function deleteProject(project) {
 }
 
 function confirmLeavingSegmentation() {
+  return $("annotationWorkspace").hidden || confirmImageChange();
   return !Segmentation.active() || $("annotationWorkspace").hidden || !Segmentation.dirty() || confirm("当前实例分割有未保存的修改，确定放弃并离开吗？");
 }
 
 function showCreate(force = false) {
   if (force !== true && !confirmLeavingSegmentation()) return;
+  projectNavigation++;
+  resetImageBrowsers();
   current = null;
   $("createView").hidden = false;
   $("projectView").hidden = true;
@@ -160,6 +167,17 @@ function showCreate(force = false) {
 
 async function showProject(id) {
   if (!confirmLeavingSegmentation()) return;
+  const navigation = ++projectNavigation;
+  let project;
+  try { project = await api(`/api/projects/${id}`); }
+  catch (error) { if (navigation === projectNavigation) alert(`项目加载失败：${error.message}`); return; }
+  if (navigation !== projectNavigation) return;
+  if (project.task === "video") {
+    window.location.assign(`/video?project=${encodeURIComponent(id)}`);
+    return;
+  }
+  resetImageBrowsers();
+  current = project;
   current = await api(`/api/projects/${id}`);
   $("annotationWorkspace").hidden = true;
   $("exportStatus").textContent = "";
@@ -172,8 +190,12 @@ async function showProject(id) {
   $("pageSubtitle").textContent = `${taskNames[current.task]} · 模型输入上限 ${current.model_max_side}px`;
   renderProjectList();
   renderAnalysis();
+  await loadImagePage("project");
+  if (navigation !== projectNavigation) return;
   if (current.latest_suggestion) {
-    api(`/api/projects/${id}/suggestions/latest`).then(result => showPilotResult(result, false)).catch(() => {});
+    api(`/api/projects/${id}/suggestions/latest`).then(result => {
+      if (navigation === projectNavigation) showPilotResult(result, false);
+    }).catch(() => {});
   } else {
     $("pilotPanel").hidden = true;
   }
@@ -182,7 +204,16 @@ async function showProject(id) {
 function renderAnalysis() {
   renderDatasetIO();
   const a = current.analysis;
-  if (!a) return;
+  $("openWorkspace").disabled = !a;
+  $("startAI").hidden = current.task === "instance_segmentation";
+  $("runPilot").hidden = current.task === "instance_segmentation";
+  $("runPilot").disabled = !a || !current.ai_adapter;
+  if (!a) {
+    for (const id of ["statImages", "statMP", "statSize", "statCoarse"]) $(id).textContent = "—";
+    $("routeBars").replaceChildren(); $("pipeline").replaceChildren();
+    currentLabels = [...current.labels]; renderCurrentLabels();
+    return;
+  }
   $("statImages").textContent = a.image_count.toLocaleString();
   $("statMP").textContent = `${a.average_megapixels} MP`;
   $("statSize").textContent = `${a.max_width} × ${a.max_height}`;
@@ -218,13 +249,22 @@ function renderAnalysis() {
 }
 
 async function analyze(id) {
+  if (!confirmLeavingSegmentation()) return;
+  const navigation = projectNavigation;
   const button = $("reanalyze");
   button.disabled = true;
   button.textContent = "分析中…";
   try {
-    current = await api(`/api/projects/${id}/analyze`, {method: "POST"});
+    const project = await api(`/api/projects/${id}/analyze`, {method: "POST"});
+    if (navigation !== projectNavigation || current?.id !== id) return;
+    current = project;
+    resetImageBrowsers();
+    $("annotationWorkspace").hidden = true;
     projects = projects.map(p => p.id === current.id ? current : p);
     renderAnalysis(); renderProjectList();
+    await loadImagePage("project");
+  } catch (error) {
+    if (navigation === projectNavigation) $("projectImageStatus").textContent = `分析失败：${error.message}`;
   } finally {
     button.disabled = false; button.textContent = "重新分析";
   }
@@ -386,16 +426,83 @@ async function openAnnotationWorkspace() {
   if (!current) return;
   Segmentation.configure();
   const panel = $("annotationWorkspace");
+  if (!panel.hidden) { panel.scrollIntoView({behavior: "smooth"}); return; }
   if (Segmentation.active() && !panel.hidden) { panel.scrollIntoView({behavior: "smooth"}); return; }
   panel.hidden = false;
   $("workspaceStatus").textContent = "正在载入图像列表…";
-  editor.images = await api(`/api/projects/${current.id}/images`);
-  $("workspaceImage").innerHTML = editor.images.map(row => `<option value="${escapeHtml(row.path)}">${escapeHtml(row.path)}</option>`).join("");
   $("workspaceLabel").innerHTML = (current.labels?.length ? current.labels : ["person"]).map(label => `<option value="${escapeHtml(label)}">${escapeHtml(label)}</option>`).join("");
-  if (editor.images.length) await loadEditorImage(editor.images[0].path);
+  await loadImagePage("workspace");
   panel.scrollIntoView({behavior: "smooth", block: "start"});
 }
 
+function setEditorLoading(loading) {
+  editor.loading = loading;
+  $("annotationWorkspace").querySelector(".viewer-grid").inert = loading;
+  $("annotationWorkspace").querySelector(".editor-tools").inert = loading;
+  $("segmentationTools").inert = loading;
+  $("segmentationOperations").inert = loading;
+  $("workspaceLabel").disabled = loading;
+  $("saveAnnotations").disabled = loading || !editor.image;
+  $("workspaceImage").disabled = loading || !editor.images.length;
+}
+
+function cancelEditorLoad() {
+  editorLoadSequence++;
+  editorLoadController?.abort();
+  clearTimeout(editor.cropTimer);
+  editor.cropToken++;
+  setEditorLoading(false);
+}
+
+async function loadEditorImage(path, meta = editor.images.find(row => row.path === path)) {
+  cancelEditorLoad();
+  const sequence = editorLoadSequence, projectId = current.id;
+  const controller = editorLoadController = new AbortController();
+  const active = () => sequence === editorLoadSequence && current?.id === projectId;
+  setEditorLoading(true);
+  $("workspaceStatus").textContent = "正在加载图像与标注…";
+  try {
+    const annotation = await api(`/api/projects/${projectId}/annotations?image=${encodeURIComponent(path)}`, {signal: controller.signal});
+    if (!active()) return false;
+    const thumbnail = new Image();
+    await new Promise((resolve, reject) => {
+      const abort = () => { thumbnail.src = ""; reject(new DOMException("Cancelled", "AbortError")); };
+      thumbnail.onload = () => { controller.signal.removeEventListener("abort", abort); resolve(); };
+      thumbnail.onerror = () => { controller.signal.removeEventListener("abort", abort); reject(new Error("缩略图加载失败")); };
+      controller.signal.addEventListener("abort", abort, {once: true});
+      thumbnail.src = `/api/projects/${projectId}/thumbnail/${encodedPath(path)}`;
+    });
+    if (!active()) return false;
+    Segmentation.reset();
+    closeBoxLabelPanel();
+    editor.image = path;
+    editor.meta = meta;
+    editor.thumbnail = thumbnail;
+    editor.selected = -1;
+    editor.interaction = null;
+    editor.dirty = false;
+    editor.cropView = null;
+    setEditorTool("draw");
+    editor.view.width = editor.meta.width;
+    editor.view.height = editor.meta.height;
+    editor.view.x = 0;
+    editor.view.y = 0;
+    editor.objects = annotation.objects || [];
+    editor.annotationStatus = annotation.status;
+    Segmentation.sync();
+    refreshEditorCrop();
+    $("workspaceCurrentImage").textContent = `当前图像：${path}`;
+    renderVideoFrameOrigin(projectId, path);
+    $("workspaceStatus").textContent = `${annotation.status} · ${editor.objects.length} ${Segmentation.active() ? "个实例" : "个框"}`;
+    updateDeleteButton();
+    return true;
+  } catch (error) {
+    if (active() && error.name !== "AbortError") {
+      $("workspaceStatus").textContent = `加载失败：${error.message}。可重新选择图像或点击跳转重试。`;
+      $("workspaceImage").value = editor.image || "";
+    }
+    return false;
+  } finally { if (active()) setEditorLoading(false); }
 async function loadEditorImage(path) {
   Segmentation.reset();
   closeBoxLabelPanel();
@@ -723,7 +830,7 @@ function wait(milliseconds) {
 }
 
 async function runInitialDetection() {
-  if (!current?.ai_adapter || !editor.image || editor.initialJob) return;
+  if (!current?.ai_adapter || !editor.image || editor.initialJob || editor.loading) return;
   if (editor.dirty) {
     $("workspaceStatus").textContent = "请先保存或放弃当前人工修改，再运行 AI 初标。";
     return;
@@ -733,26 +840,32 @@ async function runInitialDetection() {
     ? `该图像已有人工保存结果。AI 将扫描约 ${estimated} 个切片并另存建议，不会覆盖人工结果。是否继续？`
     : `AI 将扫描当前整张图像的约 ${estimated} 个重叠切片，可能需要较长时间。是否开始？`;
   if (!confirm(message)) return;
+  const projectId = current.id, imagePath = editor.image, imageMeta = editor.meta;
+  const active = () => current?.id === projectId && editor.image === imagePath;
   const button = $("runInitialDetection"), status = $("workspaceStatus");
   button.disabled = true;
   button.textContent = "正在启动…";
   try {
-    let job = await api(`/api/projects/${current.id}/initial-detection`, {
-      method: "POST", body: JSON.stringify({image: editor.image})
+    let job = await api(`/api/projects/${projectId}/initial-detection`, {
+      method: "POST", body: JSON.stringify({image: imagePath})
     });
     editor.initialJob = job.job_id;
     while (["queued", "running"].includes(job.status)) {
-      status.textContent = `AI 初标 ${job.completed_tiles}/${job.total_tiles} · 已发现 ${job.candidate_count} 个候选框`;
+      if (active()) status.textContent = `AI 初标 ${job.completed_tiles}/${job.total_tiles} · 已发现 ${job.candidate_count} 个候选框`;
       button.textContent = `${job.completed_tiles}/${job.total_tiles}`;
       await wait(1000);
-      job = await api(`/api/projects/${current.id}/initial-detection/${job.job_id}`);
+      job = await api(`/api/projects/${projectId}/initial-detection/${job.job_id}`);
     }
     if (job.status === "failed") throw new Error(job.error || "AI 初标失败");
-    const image = editor.image;
-    await loadEditorImage(image);
-    status.textContent = `AI 初标完成 · ${job.candidate_count} 个框 · ${job.error_count || 0} 个切片失败`;
+    if (!active()) return;
+    if (editor.dirty || editor.loading) {
+      status.textContent = "AI 建议已保存；当前编辑继续保留，可在保存后重新打开图像查看。";
+      return;
+    }
+    const loaded = await loadEditorImage(imagePath, imageMeta);
+    if (loaded && active()) status.textContent = `AI 初标完成 · ${job.candidate_count} 个框 · ${job.error_count || 0} 个切片失败`;
   } catch (error) {
-    status.textContent = `AI 初标失败：${error.message}`;
+    if (active()) status.textContent = `AI 初标失败：${error.message}`;
   } finally {
     editor.initialJob = null;
     button.disabled = !current?.ai_adapter;
@@ -910,6 +1023,7 @@ $("detailCanvas").addEventListener("wheel", event => {
 }, {passive: false});
 
 function deleteSelectedBox() {
+  if (editor.loading) return;
   if (Segmentation.active()) return Segmentation.deleteObject();
   if (editor.selected < 0) return;
   editor.objects.splice(editor.selected, 1);
@@ -921,6 +1035,7 @@ function deleteSelectedBox() {
 function updateDeleteButton() { $("deleteBox").disabled = editor.selected < 0; Segmentation.sync(); }
 $("deleteBox").onclick = deleteSelectedBox;
 document.addEventListener("keydown", event => {
+  if (editor.loading) return;
   if (event.code === "Space" && !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) {
     editor.spacePressed = true;
     if (!$("annotationWorkspace").hidden) event.preventDefault();
@@ -938,6 +1053,7 @@ document.addEventListener("keydown", event => {
 document.addEventListener("keyup", event => { if (event.code === "Space") editor.spacePressed = false; });
 $("workspaceImage").onchange = async event => {
   const nextImage = event.target.value;
+  if (!confirmImageChange()) {
   if ((editor.dirty || (Segmentation.active() && Segmentation.dirty())) && !confirm("当前图像有未保存的修改，确定切换图像并放弃这些修改吗？")) {
     event.target.value = editor.image;
     return;
@@ -950,6 +1066,7 @@ window.addEventListener("beforeunload", event => {
   event.returnValue = "";
 });
 $("saveAnnotations").onclick = async () => {
+  if (!current || !editor.image || editor.loading) return;
   if (!current || !editor.image) return;
   if (Segmentation.active() && !Segmentation.canSave()) return;
   const projectId = current.id, image = editor.image;
@@ -1064,7 +1181,7 @@ function renderDatasetIO() {
   const summary = current.import_summary;
   const sourceTitle = current.dataset_format === "mixed" ? "多来源数据集" : datasetFormats.find(f => f.id === current.dataset_format)?.title || current.dataset_format;
   $("datasetIOSummary").textContent = summary
-    ? `${sourceTitle} · ${summary.image_count} 张图像 · ${summary.object_count} 个导入框 · ${summary.issue_count} 项提示`
+    ? `${sourceTitle} · ${summary.image_count} 张图像 · ${summary.object_count} ${current.task === "instance_segmentation" ? "个导入实例" : "个导入框"} · ${summary.issue_count} 项提示`
     : "重新分析数据后可使用 Dataset I/O。";
   if (!formats.length) $("datasetIOSummary").textContent += " 当前任务的格式适配器尚未开放。";
   $("showImportReport").disabled = !current.dataset_revision;
@@ -1080,8 +1197,8 @@ $("showImportReport").onclick = async () => {
   target.textContent = "加载导入报告…";
   const projectId = current.id;
   try {
-    const dataset = await api(`/api/projects/${projectId}/dataset`);
-    if (current?.id === projectId) target.textContent = JSON.stringify(dataset.report, null, 2);
+    const report = await api(`/api/projects/${projectId}/dataset/report`);
+    if (current?.id === projectId) target.textContent = JSON.stringify(report, null, 2);
   } catch (error) { target.textContent = error.message; }
 };
 
@@ -1091,10 +1208,46 @@ $("datasetExportForm").addEventListener("submit", async event => {
 });
 
 Segmentation.init();
+initImageBrowsers();
 renderCreateLabels();
 api("/api/dataset-formats").then(formats => {
   datasetFormats = formats;
   renderImportFormats();
   if (current) renderDatasetIO();
 }).catch(error => { $("formError").textContent = `格式列表加载失败：${error.message}`; });
-loadProjects().catch(error => { $("formError").textContent = `服务连接失败：${error.message}`; });
+loadProjects().then(async () => {
+  const params = new URLSearchParams(window.location.search);
+  const projectId = params.get("project");
+  if (!projectId) return;
+  await showProject(projectId);
+  if (current?.id !== projectId || current.task === "video") return;
+  if (!current.analysis && current.video_source) await analyze(projectId);
+  if (!current.analysis) return;
+  await openAnnotationWorkspace();
+  const path = params.get("image");
+  if (path && path !== editor.image) {
+    $("workspaceImageQuery").value = path;
+    await loadImagePage("workspace", 0, path);
+    const meta = editor.images.find(row => row.path === path);
+    if (meta && editor.image !== path) {
+      await loadEditorImage(path, meta);
+      $("workspaceImage").value = path;
+    }
+  }
+}).catch(error => { $("formError").textContent = `服务连接失败：${error.message}`; });
+
+async function renderVideoFrameOrigin(projectId, path) {
+  const target = $("videoFrameOrigin");
+  target.hidden = true;
+  target.replaceChildren();
+  if (!current?.video_source) return;
+  try {
+    const {video} = await api(`/api/projects/${projectId}/image-origin?image=${encodeURIComponent(path)}`);
+    if (current?.id !== projectId || editor.image !== path || !video) return;
+    const link = document.createElement("a");
+    link.href = `/video?${new URLSearchParams({project: video.project_id, video: video.video_id, frame: video.frame_index})}`;
+    link.textContent = `返回来源视频 · 第 ${video.frame_index + 1} 帧 · ${Number(video.timestamp).toFixed(3)} 秒`;
+    target.appendChild(link);
+    target.hidden = false;
+  } catch { /* An independently exported image may no longer have a source video. */ }
+}

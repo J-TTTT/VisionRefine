@@ -5,7 +5,6 @@ writes human annotations, AI suggestions, or the original dataset directories.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import uuid
@@ -15,12 +14,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from .common import IMAGE_EXTENSIONS, dump_json, finish
-from .models import Category, Dataset, DatasetSource, Split, Task, contained_path
+from .common import dump_json, finish
+from .models import Category, Dataset, DatasetSource, Split, Task
 from .service import image_location, load_dataset, persist_import, prepare_import
 
 Policy = Literal["keep_existing", "update_coarse", "error"]
-INPUT_EXTENSIONS = IMAGE_EXTENSIONS | {".xml", ".txt", ".json", ".yaml", ".yml", ".zip"}
 
 
 class StalePreview(ValueError):
@@ -55,31 +53,6 @@ class ImportPlanInput(BaseModel):
     conflict_resolutions: dict[str, Policy] = Field(default_factory=dict)
 
 
-def digest(path: Path) -> str:
-    before = path.stat()
-    value = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            value.update(block)
-    after = path.stat()
-    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
-        raise StalePreview(f"File changed while reading: {path}")
-    return value.hexdigest()
-
-
-def snapshot(roots: list[str], files: list[str]) -> dict[str, str]:
-    """Include directory inventories, so added labels/images invalidate a preview too."""
-    candidates = {Path(p).resolve() for p in files}
-    for directory in roots:
-        root = Path(directory).resolve()
-        if not root.is_dir():
-            raise ValueError(f"Source directory does not exist: {root}")
-        for path in root.rglob("*"):
-            if path.is_file() and path.suffix.lower() in INPUT_EXTENSIONS:
-                candidates.add(contained_path(root, path.relative_to(root).as_posix()))
-    return {str(path): digest(path) for path in sorted(candidates)}
-
-
 def preview_import(store, payload: ImportPlanInput) -> dict:
     project = store.get(payload.project_id) if payload.project_id else None
     task = project["task"] if project else payload.task
@@ -105,43 +78,25 @@ def preview_import(store, payload: ImportPlanInput) -> dict:
                     image.source_id, image.source_path = legacy_id, image.path
     if len({s.id for s in payload.sources}) != len(payload.sources):
         raise ValueError("Give each source row a unique source ID")
-    roots, files = set(), set()
     descriptors = []
     for source in payload.sources:
         root = Path(source.root).expanduser().resolve()
         annotation = Path(source.annotation_path).expanduser().resolve() if source.annotation_path else None
         if source.format == "visionrefine" and annotation and annotation.suffix.lower() == ".zip":
             from .portable import extract_native
-            files.add(str(annotation))
             extracted = store.root.parent / "cache" / "native-imports" / uuid.uuid4().hex
             extract_native(annotation, extracted)
             root, annotation = extracted, extracted / "dataset.json"
         if store.root.parent.resolve().is_relative_to(root):
             raise ValueError("A dataset source root must not contain the VisionRefine workspace directory")
-        roots.add(str(root))
+        if not root.is_dir():
+            raise ValueError(f"Source directory does not exist: {root}")
         if annotation:
-            if annotation.is_dir():
-                roots.add(str(annotation))
-            elif annotation.is_file():
-                files.add(str(annotation))
-            else:
+            if not annotation.exists():
                 raise ValueError(f"Annotation input does not exist: {annotation}")
         descriptors.append(DatasetSource(id=source.id, root=str(root), format=source.format,
                                         annotation_path=str(annotation) if annotation else None))
-    if project:
-        for record in merged.images:
-            _, path = image_location(project, record, merged)
-            files.add(str(path))
-    roots, files = sorted(roots), sorted(files)
-    fingerprint = snapshot(roots, files)
-    by_hash, by_path = {}, {i.path: i for i in merged.images}
-    for record in merged.images:
-        _, path = image_location(project, record, merged)
-        checksum = fingerprint[str(path)]
-        if record.sha256 and record.sha256 != checksum:
-            raise ValueError(f"An existing project's image changed on disk: {record.path}. Restore it before appending.")
-        record.sha256 = checksum
-        by_hash.setdefault(checksum, record)
+    by_path = {image.path: image for image in merged.images}
     catalog = {c.name: c for c in merged.categories}
     source_catalog = {s.id: s for s in merged.sources}
     summaries, conflicts = [], []
@@ -153,7 +108,8 @@ def preview_import(store, payload: ImportPlanInput) -> dict:
         root = Path(descriptor.root)
         annotation = Path(descriptor.annotation_path) if descriptor.annotation_path else None
         labels = list(dict.fromkeys(label.strip() for label in source.labels if label.strip()))
-        incoming = prepare_import(root, source.format, annotation, labels, task, source.split, trust_reviewed=source.trust_reviewed)
+        incoming = prepare_import(root, source.format, annotation, labels, task, source.split,
+                                  trust_reviewed=source.trust_reviewed, fingerprint_source=False)
         unknown = set(source.category_mapping) - {c.name for c in incoming.categories}
         if unknown:
             raise ValueError(f"Unknown categories in mapping for {source.id}: {sorted(unknown)}")
@@ -183,17 +139,16 @@ def preview_import(store, payload: ImportPlanInput) -> dict:
             record.path = f"{source.id}/{relative}"
             record.id = record.path
             record.source_id, record.source_path = source.id, relative
-            record.sha256 = fingerprint[str(contained_path(root, relative))]
+            # The user owns source/image matching. Do not bind imported images
+            # to file bytes or compare unrelated sources by content.
+            record.sha256 = None
             record.provenance.update(import_source_id=source.id, original_path=relative)
             for obj in record.objects:
                 original_category = obj.category_id
                 obj.category_id = category_map[original_category].id
                 obj.label = category_map[original_category].name
                 obj.provenance.update(import_source_id=source.id, import_category_id=original_category)
-            # A stable logical key may never be repointed to different pixels.
-            if record.path in by_path and by_path[record.path].sha256 != record.sha256:
-                raise ValueError(f"Image key {record.path} already has different content; choose a new source ID")
-            duplicate = by_hash.get(record.sha256)
+            duplicate = by_path.get(record.path)
             if duplicate:
                 action = payload.conflict_resolutions.get(record.path, payload.duplicate_policy)
                 if action == "update_coarse" and record.status == "unreviewed":
@@ -213,10 +168,9 @@ def preview_import(store, payload: ImportPlanInput) -> dict:
                     updated += 1
                 else:
                     skipped += 1
-                # Keep the original split, preventing train/val leakage through duplication.
+                # Keep the existing split for a repeated logical image path.
             else:
                 merged.images.append(record)
-                by_hash[record.sha256] = record
                 by_path[record.path] = record
                 added += 1
         summaries.append(dict(id=source.id, format=source.format, root=str(root), mappings=mappings,
@@ -228,8 +182,6 @@ def preview_import(store, payload: ImportPlanInput) -> dict:
     if task in {"detection", "instance_segmentation", "grounding", "classification"} and not merged.categories:
         raise ValueError("Add at least one class for image-only datasets")
     merged = finish(merged)
-    if fingerprint != snapshot(roots, files):
-        raise StalePreview("Source inputs changed during preview; preview again")
     summary = dict(added_images=added, updated_coarse=updated, skipped_duplicates=skipped,
                    image_count=len(merged.images), object_count=merged.report.object_count,
                    category_count=len(merged.categories),
@@ -239,13 +191,13 @@ def preview_import(store, payload: ImportPlanInput) -> dict:
     result = dict(preview_id=preview_id, project_id=payload.project_id, task=task, summary=summary,
                   sources=summaries, categories=[c.model_dump() for c in merged.categories], conflicts=conflicts,
                   commit_allowed=not any(c["action"] == "error" for c in conflicts),
-                  warnings=["Identical file bytes are treated as one image. Existing splits and human/AI revisions are retained.",
+                  warnings=["Only the same source ID and relative image path are treated as one image. Existing human/AI revisions are retained.",
                             "Only identical category names merge automatically; other renames require explicit mappings."])
     merged.provenance.update(format="mixed", source_file=None, source_sha256=None, imported_at=datetime.now(timezone.utc).isoformat(),
                              operation=dict(kind="append" if project else "create", preview_id=preview_id,
                                             summary=summary, sources=summaries, conflicts=conflicts))
-    plan = dict(result=result, dataset=merged.model_dump(), input=payload.model_dump(), roots=roots, files=files,
-                fingerprint=fingerprint, base_revision=project.get("dataset_revision") if project else None,
+    plan = dict(result=result, dataset=merged.model_dump(), input=payload.model_dump(),
+                base_revision=project.get("dataset_revision") if project else None,
                 base_labels=project["labels"] if project else None, revision=revision,
                 target_project_id=payload.project_id or f"dataset-{uuid.uuid4().hex[:16]}")
     dump_json(store.root.parent / "import-previews" / f"{preview_id}.json", plan)
@@ -294,13 +246,16 @@ def commit_import(store, preview_id: str) -> dict:
                     raise StalePreview("Project data/categories changed since preview; preview again")
             elif project:
                 raise StalePreview("The target project already exists")
-            try:
-                fresh = snapshot(plan["roots"], plan["files"])
-            except (OSError, ValueError) as exc:
-                raise StalePreview(f"Source inputs changed since preview: {exc}") from None
-            if fresh != plan["fingerprint"]:
-                raise StalePreview("Source inputs changed since preview; preview again")
             dataset = Dataset.model_validate(plan["dataset"])
+            # A cheap existence check protects against committing a preview
+            # after an image was removed, without reading every image again.
+            for record in dataset.images:
+                try:
+                    _, image_path = image_location(project or {}, record, dataset)
+                    if not image_path.is_file():
+                        raise FileNotFoundError(image_path)
+                except (KeyError, OSError, ValueError) as exc:
+                    raise StalePreview(f"Image missing since preview: {record.path}") from exc
             if project is None:
                 project = store.create(dict(name=plan["input"]["name"], task=dataset.task,
                                             dataset_path=dataset.sources[0].root,
@@ -308,7 +263,7 @@ def commit_import(store, preview_id: str) -> dict:
                                             model_max_side=plan["input"]["model_max_side"]),
                                        project_id=project_id, persist=False)
             # Read/save occurs under the same lock as edits and other appends.
-            persist_import(store, project, dataset, revision=plan["revision"])
+            persist_import(store, project, dataset, revision=plan["revision"], hash_images=False)
             plan["committed"] = True
             pending = path.with_suffix(".json.tmp")
             dump_json(pending, plan)

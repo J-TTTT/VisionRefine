@@ -12,13 +12,16 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from PIL import Image
 
+from ..catalog import image_record, write_dataset_index
+
 from . import registry
 from .common import dump_json
 from .models import Annotation, Category, Dataset, ImageRecord, contained_path, safe_relative_path
 from .portable import file_digest, portable_dataset, redact
 
 
-def prepare_import(root: Path, format_id: str, source: Path | None, labels: list[str], task: str, split: str, *, trust_reviewed=False) -> Dataset:
+def prepare_import(root: Path, format_id: str, source: Path | None, labels: list[str], task: str, split: str, *,
+                   trust_reviewed=False, fingerprint_source=True) -> Dataset:
     adapter = registry.get(format_id, task, "importer")
     dataset = adapter.importer.read(root.resolve(), source, labels, split, **({"trust_reviewed": trust_reviewed} if format_id == "visionrefine" else {}))
     dataset.task = task
@@ -27,21 +30,23 @@ def prepare_import(root: Path, format_id: str, source: Path | None, labels: list
     dataset.provenance = {**dataset.provenance,
         "format": format_id, "imported_at": datetime.now(timezone.utc).isoformat(),
         "source_file": str(source) if source else None,
-        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest() if source and source.is_file() else None,
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest() if fingerprint_source and source and source.is_file() else None,
     }
     return dataset
 
 
-def persist_import(store, project: dict, dataset: Dataset, revision: str | None = None) -> dict:
-    for image in dataset.images:
-        if not image.sha256:
-            _, path = image_location(project, image, dataset)
-            image.sha256 = file_digest(path)
+def persist_import(store, project: dict, dataset: Dataset, revision: str | None = None, *, hash_images=True) -> dict:
+    if hash_images:
+        for image in dataset.images:
+            if not image.sha256:
+                _, path = image_location(project, image, dataset)
+                image.sha256 = file_digest(path)
     revision = revision or f"import-{uuid.uuid4().hex}"
     dataset.provenance["parent_revision_id"] = project.get("dataset_revision")
     dataset.provenance["revision_id"] = revision
     destination = store.root / project["id"] / "datasets" / f"{revision}.json"
     dump_json(destination, dataset.model_dump())
+    write_dataset_index(destination.with_suffix(".sqlite3"), dataset, project)
     project["dataset_revision"] = revision
     project["dataset_format"] = dataset.provenance["format"]
     project["labels"] = [c.name for c in dataset.categories]
@@ -82,8 +87,16 @@ def document_path(store, project_id: str, image: str, kind: str) -> Path:
 
 
 def effective_annotation(store, project: dict, image: str, dataset: Dataset | None = None,
-                         imported_record: ImageRecord | None = None) -> dict:
+                         imported_record: ImageRecord | None = None, *, include_draft=True) -> dict:
     image = safe_relative_path(image)
+    if include_draft:
+        path = document_path(store, project["id"], image, "ai_drafts")
+        if path.is_file():
+            draft = json.loads(path.read_text(encoding="utf-8"))
+            base = effective_annotation(store, project, image, dataset, imported_record, include_draft=False)
+            checksum = hashlib.sha256(json.dumps(base, sort_keys=True, allow_nan=False).encode()).hexdigest()
+            if draft.get("base_revision") == checksum:
+                return draft
     # An explicitly reviewed empty image must take precedence over every proposal.
     for folder, status in (("annotations", "human_reviewed"), ("suggestions", "ai_suggestion")):
         path = document_path(store, project["id"], image, folder)
@@ -96,13 +109,13 @@ def effective_annotation(store, project: dict, image: str, dataset: Dataset | No
         if path.is_file():
             suggestion = json.loads(path.read_text(encoding="utf-8"))
             return dict(image=image, objects=suggestion.get("objects", []), status="ai_suggestion", revision_id=latest["revision_id"])
-    if dataset is None:
-        dataset = load_dataset(store, project)
-    if dataset:
-        record = imported_record or next((i for i in dataset.images if i.path == image), None)
-        if record:
-            return dict(image=image, objects=[o.model_dump() for o in record.objects], status=record.status,
-                        revision_id=dataset.provenance.get("revision_id"), split=record.split)
+    record = imported_record
+    if record is None:
+        record = next((i for i in dataset.images if i.path == image), None) if dataset is not None else image_record(store, project, image)
+    if record:
+        return dict(image=image, objects=[o.model_dump() for o in record.objects], status=record.status,
+                    revision_id=dataset.provenance.get("revision_id") if dataset is not None else project.get("dataset_revision"),
+                    split=record.split)
     return dict(image=image, objects=[], status="unreviewed", revision_id=None)
 
 
@@ -130,7 +143,7 @@ def select_snapshot(store, project: dict, policy: str, splits: list[str]):
     for record in dataset.images:
         if splits and record.split not in splits:
             continue
-        annotation = effective_annotation(store, project, record.path, dataset, record)
+        annotation = effective_annotation(store, project, record.path, dataset, record, include_draft=policy != "reviewed")
         if annotation["status"] not in accepted[policy]:
             skipped.append(dict(image=record.path, status=annotation["status"]))
             continue
@@ -142,7 +155,7 @@ def select_snapshot(store, project: dict, policy: str, splits: list[str]):
             if category is None:
                 raise ValueError(f"Unknown label in {record.path}: {obj.get('label')}")
             image.objects.append(Annotation.model_validate({**obj, "id": str(obj.get("id") or f"object-{index}"),
-                "category_id": category.id, "source": annotation["status"]}))
+                "category_id": category.id, "source": obj.get("source", annotation["status"]) if annotation.get("base_revision") else annotation["status"]}))
         image.provenance["revision_id"] = annotation.get("revision_id")
         selected.images.append(image)
         selected_revisions.append(dict(image=record.path, status=image.status, revision_id=annotation.get("revision_id")))

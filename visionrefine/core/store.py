@@ -9,6 +9,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .catalog import write_analysis_index
+
 
 def _slug(value: str) -> str:
     value = re.sub(r"[^a-zA-Z0-9_-]+", "-", value.strip()).strip("-").lower()
@@ -33,8 +35,8 @@ class ProjectStore:
         projects = []
         for path in sorted(self.root.glob("*/project.json")):
             try:
-                projects.append(json.loads(path.read_text(encoding="utf-8")))
-            except (OSError, json.JSONDecodeError):
+                projects.append(self.get(path.parent.name))
+            except (KeyError, OSError, json.JSONDecodeError):
                 continue
         return sorted(projects, key=lambda row: row.get("created_at", ""), reverse=True)
 
@@ -67,6 +69,8 @@ class ProjectStore:
     def save(self, project: dict) -> None:
         folder = self.root / project["id"]
         folder.mkdir(parents=True, exist_ok=True)
+        if "images" in (project.get("analysis") or {}):
+            project["analysis"] = write_analysis_index(folder, project["analysis"])
         temp = folder / f"project-{uuid.uuid4().hex}.json.tmp"
         temp.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(folder / "project.json")
@@ -77,7 +81,13 @@ class ProjectStore:
         path = self.root / project_id / "project.json"
         if not path.exists():
             raise KeyError(project_id)
-        return json.loads(path.read_text(encoding="utf-8"))
+        project = json.loads(path.read_text(encoding="utf-8"))
+        if "images" in (project.get("analysis") or {}):
+            with self.locked(project_id):
+                project = json.loads(path.read_text(encoding="utf-8"))
+                if "images" in (project.get("analysis") or {}):
+                    self.save(project)
+        return project
 
     def delete(self, project_id: str) -> Path:
         """Move only VisionRefine metadata to recoverable local trash."""

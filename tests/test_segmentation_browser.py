@@ -82,6 +82,7 @@ def test_polygon_mask_edit_save_reload(tmp_path, monkeypatch):
                 return 0
 
             open_editor()
+            playwright.expect(page.locator("#exportFormat")).to_have_value("coco_segmentation")
             playwright.expect(page.locator("#segmentationTools")).to_be_visible()
             playwright.expect(page.locator("#runInitialDetection")).to_be_hidden()
             # Draw with real pointer input, close with Enter.

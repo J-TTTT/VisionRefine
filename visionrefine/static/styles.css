@@ -64,3 +64,14 @@
 .segmentation-operations small { color:#5f7167; font-size:11px; }
 .seg-operation-preview { display:flex; align-items:center; flex-wrap:wrap; gap:8px; width:100%; border:1px solid #49a876; background:#e9f9ef; padding:10px; border-radius:5px; }
 .seg-operation-preview span { flex:1; min-width:230px; color:#184e32; font-size:12px; }
+
+.image-navigation { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:10px 0; }
+.image-navigation form { display:flex; align-items:center; gap:6px; margin:0; }
+.image-navigation input { width:180px; margin:0; }
+.image-navigation input[type=number] { width:72px; }
+.image-navigation label { display:flex; align-items:center; gap:5px; margin:0; }
+.image-navigation span { color:var(--muted); font-size:12px; }
+#workspaceCurrentImage { overflow-wrap:anywhere; }
+#workspaceImage { max-width:min(420px,75vw); }
+.video-workspace-link { display: block; margin: 14px 0; padding: 10px 12px; border: 1px solid #b9d8c7; border-radius: 8px; color: #176343; text-decoration: none; font-weight: 600; background: #edf7f0; }
+.video-workspace-link:hover { background: #dff0e5; }

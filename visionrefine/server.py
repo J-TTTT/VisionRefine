@@ -15,7 +15,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
@@ -26,6 +26,7 @@ from visionrefine.core.initial_detection import build_tiles, run_tiled_detection
 from visionrefine.core.pilot import extract_jpeg_crop, run_detection_pilot
 from visionrefine.core.router import plan_image
 from visionrefine.core.store import ProjectStore
+from visionrefine.core import catalog
 from visionrefine.core.dataset_io import registry as dataset_registry
 from visionrefine.core.dataset_io.models import Annotation, Split, safe_relative_path
 from visionrefine.core.dataset_io.service import (
@@ -201,7 +202,8 @@ def create_project(payload: ProjectInput) -> dict:
     format_id = payload.dataset_format
     # Compatibility with the former coarse-annotation path field.
     if annotation and format_id == "images":
-        format_id = "yolo_detection" if annotation.suffix.lower() in {".yaml", ".yml"} else "coco_detection"
+        format_id = ("coco_segmentation" if payload.task == "instance_segmentation" else
+                     "yolo_detection" if annotation.suffix.lower() in {".yaml", ".yml"} else "coco_detection")
     imported = None
     try:
         dataset_registry.get(format_id, payload.task, "importer")
@@ -234,6 +236,16 @@ def get_project(project_id: str) -> dict:
 @project_transaction
 def delete_project(project_id: str) -> dict:
     try:
+        project = store.get(project_id)
+        from visionrefine.core.ai.service import AIService, TERMINAL
+        if any(job["status"] not in TERMINAL for job in AIService(store).jobs(project_id)):
+            raise HTTPException(409, "请先等待或取消这个项目的 AI 任务")
+        if project.get("task") == "video" or project.get("video_parent_project"):
+            from visionrefine.core.video.service import VideoConflict, ensure_no_active_jobs
+            try:
+                ensure_no_active_jobs(store, project.get("video_parent_project") or project_id)
+            except VideoConflict as exc:
+                raise HTTPException(409, str(exc)) from None
         destination = store.delete(project_id)
     except KeyError:
         raise HTTPException(404, "Project not found") from None
@@ -252,6 +264,8 @@ def save_labels(project_id: str, payload: LabelsInput) -> dict:
         project = store.get(project_id)
     except KeyError:
         raise HTTPException(404, "Project not found") from None
+    if project.get("task") == "video":
+        raise HTTPException(400, "Manage video event labels in the video workspace")
     if project.get("labels_locked"):
         raise HTTPException(409, "Label schema is locked after inference starts")
     labels = []
@@ -321,8 +335,7 @@ def run_pilot(project_id: str) -> dict:
     if project.get("task") == "detection":
         project["labels_locked"] = True
         store.save(project)
-    analysis = project.get("analysis") or {}
-    images = analysis.get("images") or []
+    images = catalog.image_page(store, project, limit=1)["items"]
     if not images:
         raise HTTPException(400, "Analyze the dataset before running a pilot")
 
@@ -409,6 +422,8 @@ def analyze_project(project_id: str) -> dict:
         raise HTTPException(404, "Project not found") from None
 
     root = Path(project["dataset_path"])
+    if project.get("task") == "video":
+        raise HTTPException(400, "Use the video workspace to import and index video resources")
     try:
         dataset = load_dataset(store, project)
         if dataset is None or project.get("dataset_format") == "images":
@@ -473,18 +488,10 @@ def analyze_project(project_id: str) -> dict:
 def project_image(project: dict, relative_path: str) -> tuple[Path, Path]:
     try:
         relative_path = safe_relative_path(relative_path)
-        dataset = load_dataset(store, project)
-        if dataset:
-            record = next((i for i in dataset.images if i.path == relative_path), None)
-            if record is None:
-                raise HTTPException(404, "Image is not in the dataset manifest")
-            root, path = image_location(project, record, dataset)
-        else:
-            root = Path(project["dataset_path"]).resolve()
-            path = (root / relative_path).resolve()
+        root, path = catalog.image_location(store, project, relative_path)
         if not path.is_relative_to(root) or not path.is_file():
             raise HTTPException(404, "Image not found")
-    except (ValueError, OSError):
+    except (KeyError, ValueError, OSError):
         raise HTTPException(404, "Image not found")
     return root, path
 
@@ -618,12 +625,28 @@ def initial_detection_status(project_id: str, job_id: str) -> dict:
 
 
 @app.get("/api/projects/{project_id}/images")
-def project_images(project_id: str) -> list[dict]:
+def project_images(project_id: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),
+                   q: str = Query("", max_length=256), split: Split | None = None) -> dict:
     try:
         project = store.get(project_id)
     except KeyError:
         raise HTTPException(404, "Project not found") from None
-    return (project.get("analysis") or {}).get("images") or []
+    try:
+        return catalog.image_page(store, project, offset=offset, limit=limit, query=q.strip(), split=split)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@app.get("/api/projects/{project_id}/image-origin")
+def image_origin(project_id: str, image: str) -> dict:
+    project = get_project(project_id)
+    try:
+        record = catalog.image_record(store, project, safe_relative_path(image))
+    except (KeyError, ValueError, OSError):
+        raise HTTPException(404, "Image not found") from None
+    if record is None:
+        raise HTTPException(404, "Image not found")
+    return {"video": record.provenance.get("video")}
 
 
 @app.get("/api/projects/{project_id}/thumbnail/{relative_path:path}")
@@ -690,9 +713,6 @@ def save_annotations(project_id: str, payload: AnnotationInput) -> dict:
     except KeyError:
         raise HTTPException(404, "Project not found") from None
     _, image_path = project_image(project, payload.image)
-    dataset = load_dataset(store, project)
-    if dataset and not any(i.path == payload.image for i in dataset.images):
-        raise HTTPException(400, "Image is not in the imported dataset manifest")
     with Image.open(image_path) as image:
         image_width, image_height = image.size
     allowed = set(project.get("labels") or ["person"])
@@ -745,7 +765,7 @@ def save_annotations(project_id: str, payload: AnnotationInput) -> dict:
             raise HTTPException(400, f"Invalid object at index {index}: {exc}") from None
     if len({o["id"] for o in objects}) != len(objects):
         raise HTTPException(400, "Object IDs must be unique within an image")
-    parent = effective_annotation(store, project, payload.image, dataset)
+    parent = effective_annotation(store, project, payload.image)
     revision_id = datetime.now(timezone.utc).strftime("human-%Y%m%dT%H%M%S%fZ")
     document = {
         "image": payload.image,
@@ -779,6 +799,14 @@ def dataset_manifest(project_id: str) -> dict:
     if dataset is None:
         raise HTTPException(400, "Analyze the dataset first")
     return dataset.model_dump()
+
+
+@app.get("/api/projects/{project_id}/dataset/report")
+def dataset_report(project_id: str) -> dict:
+    report = catalog.import_report(store, get_project(project_id))
+    if report is None:
+        raise HTTPException(400, "Analyze the dataset first")
+    return report
 
 
 @app.post("/api/projects/{project_id}/dataset/import")
@@ -919,6 +947,25 @@ def save_export_preset(project_id: str, payload: ExportPreset):
 
 
 app.mount("/assets", StaticFiles(directory=STATIC_ROOT), name="assets")
+
+# Keep video data and workflows independent of image dataset adapters. Resolve
+# the store at request time, including isolated test and embedded-server stores.
+from visionrefine.core.video.api import create_video_router
+
+app.include_router(create_video_router(lambda: store))
+from visionrefine.core.ai.api import create_ai_router
+
+app.include_router(create_ai_router(lambda: store))
+
+
+@app.get("/ai")
+def ai_settings():
+    return FileResponse(STATIC_ROOT / "ai.html")
+
+
+@app.get("/video")
+def video_workspace():
+    return FileResponse(STATIC_ROOT / "video.html")
 
 
 @app.get("/")

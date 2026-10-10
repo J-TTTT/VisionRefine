@@ -11,6 +11,7 @@
     <aside class="sidebar">
       <div class="brand"><span class="brand-mark">VR</span><span>VisionRefine</span></div>
       <button class="primary full" id="newProject">＋ 新建项目</button>
+      <a class="video-workspace-link" href="/video">视频标注工作台 →</a>
       <nav aria-label="项目列表">
         <div class="nav-label">项目</div>
         <div id="projectList" class="project-list"></div>
@@ -107,6 +108,13 @@
             <div class="pane-head"><div><h2>分辨率路由结果</h2><p>根据图像尺寸、任务类型和模型输入上限生成。</p></div><button id="reanalyze" class="secondary">重新分析</button></div>
             <div id="routeBars" class="route-bars"></div>
             <h3>图像检查</h3>
+            <div class="image-navigation">
+              <form id="projectImageSearch"><input id="projectImageQuery" type="search" maxlength="256" placeholder="按图像路径搜索" aria-label="搜索项目图像"><button class="secondary">搜索</button></form>
+              <button class="secondary" id="projectImagePrev" type="button">上一页</button>
+              <form id="projectImageJump"><label>第 <input id="projectImagePage" type="number" min="1" value="1" required aria-label="项目图像页码"> 页</label><button class="secondary">跳转</button></form>
+              <button class="secondary" id="projectImageNext" type="button">下一页</button>
+              <span id="projectImageCount"></span><span id="projectImageStatus" role="status"></span>
+            </div>
             <div class="image-table-wrap"><table><thead><tr><th>图像</th><th>尺寸</th><th>MP</th><th>处理策略</th></tr></thead><tbody id="imageRows"></tbody></table></div>
           </section>
           <aside class="run-pane">
@@ -134,6 +142,14 @@
           </div>
         </section>
         <section id="annotationWorkspace" class="annotation-workspace" hidden>
+          <div class="image-navigation">
+            <form id="workspaceImageSearch"><input id="workspaceImageQuery" type="search" maxlength="256" placeholder="按图像路径搜索" aria-label="搜索工作台图像"><button class="secondary">搜索</button></form>
+            <button class="secondary" id="workspaceImagePrev" type="button">上一页</button>
+            <form id="workspaceImageJump"><label>第 <input id="workspaceImagePage" type="number" min="1" value="1" required aria-label="工作台图像页码"> 页</label><button class="secondary">跳转</button></form>
+            <button class="secondary" id="workspaceImageNext" type="button">下一页</button>
+            <span id="workspaceImageCount"></span><span id="workspaceImageStatus" role="status"></span>
+          </div>
+          <p id="workspaceCurrentImage" class="hint"></p>
           <div class="workspace-toolbar">
             <label>图像<select id="workspaceImage"></select></label>
             <label><span id="workspaceLabelCaption">新增框标签</span><select id="workspaceLabel" title="新绘制的框使用此标签"></select></label>
@@ -141,11 +157,13 @@
               <button class="secondary active" id="drawBoxTool" type="button" aria-pressed="true" title="新增框（N）">＋ 新增框</button>
               <button class="secondary" id="editBoxTool" type="button" aria-pressed="false" title="编辑框（V）">编辑框</button>
             </div>
-            <button class="secondary" id="runInitialDetection">AI 初标当前图像</button>
+            <button class="secondary" id="imageAI">AI 辅助标注</button>
+            <button class="secondary" id="runInitialDetection">切片检测（旧适配器）</button>
             <button class="secondary" id="deleteBox" disabled>删除选中框</button>
             <button class="primary" id="saveAnnotations">保存人工检查</button>
             <span id="workspaceStatus" aria-live="polite"></span>
           </div>
+          <p id="videoFrameOrigin" class="hint" hidden></p>
           <div id="segmentationTools" class="segmentation-tools" hidden>
             <button class="secondary" id="finishContour" type="button">完成轮廓 ↵</button>
             <button class="secondary" id="cancelContour" type="button">取消轮廓 Esc</button>
@@ -221,7 +239,7 @@
     <fieldset id="datasetImportInputs">
       <div id="importSources"></div>
       <button type="button" class="secondary" id="addImportSource">＋ 添加来源</button>
-      <label class="duplicate-policy">重复图片默认策略<select id="duplicatePolicy"><option value="keep_existing">保留原数据（默认）</option><option value="update_coarse">更新导入粗标注，保留人工 / AI 版本</option><option value="error">遇到重复就阻止提交</option></select><small>以文件 SHA-256 查重，不合并不同编码的相似图片。重复图片保留原划分，避免 train / val 泄漏。</small></label>
+      <label class="duplicate-policy">同一路径冲突策略<select id="duplicatePolicy"><option value="keep_existing">保留原数据（默认）</option><option value="update_coarse">更新导入粗标注，保留人工 / AI 版本</option><option value="error">遇到重复就阻止提交</option></select><small>仅同一来源标识和相对路径视为同一张图。不同来源不按文件内容去重；请自行保证图像与标注及数据划分正确。</small></label>
       <section id="datasetImportPreview" hidden>
         <h3>导入预览</h3><p id="importPreviewSummary"></p>
         <p class="hint">下方类别映射或冲突策略修改后，需要重新预览才能提交。追加不会改动已有人工确认结果。</p>
@@ -233,6 +251,13 @@
     <div class="dialog-actions"><button type="button" class="secondary" id="previewDatasetImport">检查并预览</button><button type="button" class="primary" id="commitDatasetImport" disabled>确认导入</button></div>
   </dialog>
   <script src="/assets/segmentation.js?v=segmentation-2"></script>
+  <script src="/assets/image-browser.js?v=paging-1"></script>
+  <script src="/assets/app.js?v=paging-1"></script>
+  <link rel="stylesheet" href="/assets/ai.css?v=3">
+  <script src="/assets/ai.js?v=3"></script>
+  <script src="/assets/ai-image.js?v=3"></script>
+  <script src="/assets/dataset-import.js?v=import-path-1"></script>
+  <script src="/assets/dataset-export.js?v=coco-segmentation-1"></script>
   <script src="/assets/app.js?v=segmentation-2"></script>
   <script src="/assets/dataset-import.js?v=format-center-1"></script>
   <script src="/assets/dataset-export.js?v=format-center-1"></script>

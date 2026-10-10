@@ -47,7 +47,7 @@ def test_import_edit_export_in_browser(tmp_path, monkeypatch):
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(f"http://127.0.0.1:{port}")
-                page.wait_for_function("datasetFormats.length === 8")
+                page.wait_for_function("datasetFormats.length === 9")
                 def confirm_export():
                     playwright.expect(page.locator("#exportPreflight")).to_be_visible()
                     for checkbox in page.locator("#exportPreflightFormats input[type=checkbox]").all():
@@ -123,7 +123,7 @@ def test_import_edit_export_in_browser(tmp_path, monkeypatch):
                 second_source.write_text(json.dumps(second_data))
                 page.locator("#appendDataset").click()
                 first_row = page.locator(".import-source").nth(0)
-                first_row.locator('[data-field="id"]').fill("dup")
+                first_row.locator('[data-field="id"]').fill("source1")
                 first_row.locator('[data-field="format"]').select_option("coco_detection")
                 first_row.locator('[data-field="root"]').fill(str(root))
                 first_row.locator('[data-field="annotation_path"]').fill(str(source))
